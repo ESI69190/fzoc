@@ -37,7 +37,7 @@
         button.disabled = busy;
         button.innerHTML = busy
             ? '<span class="mif-spinner4 ani-spin icon mr-1"></span> Préparation…'
-            : '<span class="mif-play icon mr-1"></span> Compiler';
+            : '<span class="mif-play ani-hover-horizontal icon mr-1"></span> Compiler';
     }
 
     function statusLabel(status) {
@@ -73,11 +73,25 @@
             return action;
         }
 
-        if (['queued', 'pending', 'running'].includes(item.status)) {
+        if (item.status === 'queued' || item.status === 'pending') {
+            const queued = document.createElement('span');
+            queued.className = 'button secondary fz-progress-button';
+
+            const position = item.queue_position
+                ? 'File #' + item.queue_position
+                : 'En file';
+
+            queued.innerHTML =
+                '<span class="mif-hour-glass icon"></span><span>' + position + '</span>';
+            action.appendChild(queued);
+            return action;
+        }
+
+        if (item.status === 'running') {
             const progress = document.createElement('span');
             progress.className = 'button secondary fz-progress-button';
             progress.innerHTML =
-                '<span class="mif-spinner4 ani-spin icon"></span><span>Progression</span>';
+                '<span class="mif-spinner4 ani-spin icon"></span><span>En cours</span>';
             action.appendChild(progress);
             return action;
         }
@@ -123,7 +137,6 @@
             } else {
                 for (const item of data.items) {
                     const tr = document.createElement('tr');
-
                     const app = document.createElement('td');
 
                     const repo = document.createElement('a');
@@ -150,6 +163,11 @@
                     const badge = document.createElement('span');
                     badge.className = 'fz-status status-' + item.status;
                     badge.textContent = statusLabel(item.status);
+
+                    if (item.request_count > 1) {
+                        badge.title = item.request_count + ' demandes regroupées';
+                    }
+
                     status.appendChild(badge);
                     tr.appendChild(status);
 
@@ -194,11 +212,27 @@
                 );
             }
 
-            setMessage(
-                'Compilation lancée pour ' + data.application.name + '.',
-                'success'
-            );
+            let successMessage;
 
+            if (data.cache_hit) {
+                successMessage =
+                    data.application.name +
+                    ' est déjà compilé pour cette révision et ce firmware.';
+            } else if (data.deduplicated) {
+                successMessage =
+                    'Une compilation identique de ' +
+                    data.application.name +
+                    ' est déjà ' +
+                    (data.status === 'running' ? 'en cours.' : 'dans la file.');
+            } else {
+                successMessage =
+                    data.application.name +
+                    ' ajouté à la file' +
+                    (data.queue_position ? ' (position ' + data.queue_position + ')' : '') +
+                    '.';
+            }
+
+            setMessage(successMessage, 'success');
             await loadRecent();
 
             if (window.turnstile) {
