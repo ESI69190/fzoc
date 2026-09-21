@@ -1,7 +1,6 @@
 server {
 
     listen 80 default_server;
-
     server_name _;
 
     access_log /dev/stdout combined;
@@ -21,30 +20,23 @@ server {
     add_header "X-Content-Type-Options" "nosniff" always;
     add_header "Referrer-Policy" "no-referrer" always;
     add_header "Permissions-Policy" "geolocation=(),midi=(),sync-xhr=(self),microphone=(),camera=(),magnetometer=(),gyroscope=(),fullscreen=(self),payment=()" always;
-    add_header "Content-Security-Policy" "default-src 'self'; script-src 'report-sample' 'self' 'unsafe-inline' https://challenges.cloudflare.com/; style-src 'report-sample' 'self' 'unsafe-inline' https://challenges.cloudflare.com/; object-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; frame-src 'self' blob: https://challenges.cloudflare.com/; img-src 'self' blob: data:; manifest-src 'self'; media-src 'self' https://challenges.cloudflare.com/; worker-src blob:;" always;
+    add_header "Content-Security-Policy" "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; connect-src 'self'; font-src 'self' data: https://cdn.jsdelivr.net; frame-src 'self' https://challenges.cloudflare.com; img-src 'self' data: https://eyeshield-informatique.tech; manifest-src 'self'; media-src 'self'; worker-src 'self' blob:;" always;
 
     location ~* \.(jpg|jpeg|png|gif|svg|ico|css|js|json)$ {
         add_header "Cache-Control" "no-cache, must-revalidate";
         etag on;
+        try_files $uri =404;
     }
 
     location ~ \.php$ {
         try_files       $uri =404;
         fastcgi_pass    $FPM_HOST:$FPM_PORT;
         include         fastcgi_params;
-        fastcgi_param   SCRIPT_FILENAME          $document_root$fastcgi_script_name;
-        fastcgi_param   SCRIPT_NAME              $fastcgi_script_name;
+        fastcgi_param   SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param   SCRIPT_NAME $fastcgi_script_name;
     }
-
-
-    location = / {
-
-    }
-
 
     location / {
-        set $oldUri $uri;
-        try_files $uri $uri/ /app/index.php?$args;
+        try_files $uri $uri/ /index.php?$args;
     }
-
 }

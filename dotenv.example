@@ -1,24 +1,33 @@
-#nginx
+# nginx
+# Keep 127.0.0.1 when a reverse proxy runs on the same host.
+# Use 0.0.0.0 when the reverse proxy is on another machine.
+EXPOSE_HOST=127.0.0.1
 EXPOSE_PORT=8090
 
-#FPM
+# FPM
 FPM_HOST=fpm
 FPM_PORT=9000
 
-
-#database
+# Database
 BDD_USERNAME=fzco
 BDD_NAME=fzco
-BDD_PASSWORD=fake_data
+BDD_PASSWORD=change_me
 
+# Debug
+DEBUG=false
 
-#UFBT - do not change if used in docker
+# uFBT - do not change when using Docker
 UFBT_PATH=/usr/local/fzoc/ufbt/
 
-#CAPTCHA
+# Worker
+FZOC_TASK_INTERVAL=2
+FZOC_MAINT_INTERVAL=3600
+
+# Cloudflare Turnstile
 IS_ACTIVE_CLOUDFLARE_TURNSTILE=false
 CLOUDFLARE_TURNSTILE_SITEKEY=fake
 CLOUDFLARE_TURNSTILE_SERVERKEY=fake
 
-#If this words are in application name it's not allowed to be compile
-BANNED_APPLICATION_WORDS=jam,jamming,jammer
+# Comma-separated words blocked in application name or repository URL.
+# Leave empty to disable the filter.
+BANNED_APPLICATION_WORDS=

@@ -1,85 +1,83 @@
 # FZOC
 
-FlipperZero Online Compiler!
+**Flipper Zero Online Compiler**
 
-[ENG]
+Ce dépôt est le fork `ESI69190/fzoc` du projet original
+[`inaz0/fzoc`](https://github.com/inaz0/fzoc).
 
-My interpreted version of flipc, originally created by [Derek Jamison](https://github.com/jamisonderek), you can install it on your machines or server.
+## Évolutions du fork ESI69190
 
-An online version is available here: [fzoc.kanjian.fr](https://fzoc.kanjian.fr)
+- interface modernisée avec **Metro UI 4** ;
+- soumission des compilations en **XHR/fetch**, sans rechargement de page ;
+- suivi temps réel de l'état `queued / running / success / error` ;
+- affichage des logs de build depuis le navigateur ;
+- **worker Docker permanent**, aucun cron hôte nécessaire ;
+- détection automatique de la branche par défaut Git (`main`, `master`, etc.) ;
+- correction du filtre `BANNED_APPLICATION_WORDS` lorsqu'il est vide ;
+- validation plus robuste de `application.fam` ;
+- vérification de l'existence réelle du `.fap` avant de déclarer un build réussi ;
+- prise en charge propre des permissions des répertoires runtime.
 
-You can compile applications for the Flipper Zero by just entering the URL of the github or gitlab repository. Every minute a task will come to compile the requested applications. After 30 days the applications are destroyed.
+## Installation rapide
 
-Once your application is compiled you just have to copy it to your Flipper Zero.
+```bash
+git clone https://github.com/ESI69190/fzoc.git
+cd fzoc
+cp dotenv.example .env
+docker compose up -d --build
+```
 
-## Supported firmware
+Pour un reverse proxy situé sur une autre machine :
 
-- official
-- momentum
-- unleashed
+```ini
+EXPOSE_HOST=0.0.0.0
+EXPOSE_PORT=8090
+```
 
+La documentation complète est dans [`INSTALL.md`](INSTALL.md).
 
-[FR]
+## Architecture
 
-Ma version interprété de flipc, créé à l'origine par [Derek Jamison](https://github.com/jamisonderek), vous pouvez l'installer sur vos machines ou serveur.
+```text
+Navigateur
+    |
+    | fetch / XHR
+    v
+PHP-FPM API
+    |
+    | crée un job
+    v
+www/tasks
+    |
+    v
+fzoc-worker
+    |
+    +--> uFBT
+    +--> logs
+    +--> .fap
+    |
+    v
+API de statut
+    |
+    v
+Navigateur
+```
 
-Une version en ligne est présente ici : [fzoc.kanjian.fr](https://fzoc.kanjian.fr)
+## API interne
 
-Vous pouvez compiler des applications pour le Flipper Zero en renseignant juste l'URL du dépôt github ou gitlab. Toutes les minutes une tache va venir compiler les applications demandées. Au bout de 30 jours les applications sont détruites.
+- `POST /api/compile.php` : crée une compilation ;
+- `GET /api/status.php?job=<id>` : suit une compilation ;
+- `GET /api/recent.php` : expose les builds récents et les statistiques.
 
-Une fois votre application compilée vous n'avez plus qu'à la copier sur votre Flipper Zero.
+## Projet original
 
-## Firmware supportés
+Le projet FZOC a été créé par
+[Alexandre Joly / inaz0](https://github.com/inaz0).
 
-- officiel
-- momentum
-- unleashed
+Ce fork conserve la licence du projet d'origine. Consultez [`LICENSE`](LICENSE).
 
-# Ma chaîne Youtube sur le Flipper Zero :
+## Interface
 
-🎞️ https://www.youtube.com/channel/@Kanjian_fr
-
-[![Ma chaîne Youtube](https://yt3.googleusercontent.com/ZTyESfQjVuNcqrrBROeB1SDHxqAT5aRcLq9r1nXZKeQc1WnwJ2uDedAb3IUEv9ovBWKxnV0r0A=s176-c-k-c0x00ffffff-no-rj)](https://www.youtube.com/channel/UCUpLghnyh9zuF3wghk6ZUng "Ma chaîne Youtube")
-
-
-# Infos complémentaires
-
------------------- Les indispensables du FlipperZero ----------------
-
-📦Le Flipper Zero : https://amzn.to/3PdLlzX
-
-📦Une coque en silicone (noire) : https://amzn.to/3LkR4CS
-
-📦Une coque en silicone (blanche) : https://amzn.to/3r8ENuv
-
-📦Une coque en silicone (orange) : https://amzn.to/44PqHMq (officiel et plus cher que les deux autres)
-
-📦Vitre de protection (pack de deux) : https://amzn.to/3RkluZL
-
-📦Une dragonne pour plus de sécurité : https://amzn.to/3PdLKlX
-
-
------------------- Communauté / soutient ------------------ 
-
-🧑‍💻Discord : https://discord.gg/EGQJurMUwh
-
-🕊️Mon twitter : https://twitter.com/bsmt_nevers
-
-☕Soutenez moi via : https://www.buymeacoffee.com/inazo
-
-🛒Ma boutique : https://shop.kanjian.fr
-
-🧺Retrouvez ma boutique de goodies sur : https://kanjian.myspreadshop.fr/
-
-🏭Mes projets sur PCB Way : https://www.pcbway.com/project/member/?bmbno=0A4A7D3F-A993-45
-
-🌐Lien de parrainage sur PCB Way : https://pcbway.com/g/1G88Z3
-
-
-# Soutient
-
-<p align="center">
-<a href="https://www.buymeacoffee.com/inazo">
-  <img src="https://www.kanjian.fr/wp-content/uploads/2022/06/H5V9_pZc-300x84.png">
-</a>
-</p>
+L'interface utilise
+[Metro UI CSS 4](https://github.com/olton/Metro-UI-CSS-4),
+chargé depuis une version épinglée `4.5.12`.

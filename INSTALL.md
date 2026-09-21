@@ -1,122 +1,128 @@
-# Prérequis
-## Docker install
+# Installation
 
-- docker
-- docker compose or (docker-compose)
-- apache2 or nginx
+## Prérequis Docker
 
-## No docker install 
+- Docker Engine
+- Docker Compose v2
+- Git
+- Un reverse proxy est recommandé pour HTTPS
 
-- mariadb or mysql
-- php8.x-fpm
-- curl
-- python3
-- python3-venv 
-- python3-pip
-- python3-dev
-- git
-- apache2 or nginx
+## Installation Docker
 
-# Docker install
+Clonez le dépôt puis créez votre configuration :
 
-[ENG]
-
-Copy the dotenv.example to .env and complete it, just need normaly database information and cloudflare if need.
-
-Add this following line in cron: (depend of your docker version the name was fzoc_fpm_1 or fzoc-fpm-1)
-
-```
-# Every minutes check for compilatio task
-* * * * * docker exec fzoc_fpm_1 php /usr/local/fzoc/www/crons/task_runner.php >/dev/null 2>&1
-
-# Every hours check for firmware update
-0 * * * * docker exec fzoc_fpm_1 sh /usr/local/fzoc/www/crons/update_ufbt.sh >/dev/null 2>&1
-
-# Every hours check for outdated application
-0 * * * * docker exec fzoc_fpm_1 php /usr/local/fzoc/www/crons/task_delete.php >/dev/null 2>&1
+```bash
+git clone https://github.com/ESI69190/fzoc.git
+cd fzoc
+cp dotenv.example .env
 ```
 
-To finish run the command to up the application (depend on your docker version maybe "docker compose" or "docker-compose")
+Modifiez au minimum :
 
-```
-docker-compose up -d
-```
-
-[FR]
-
-Copier le fichier dotenv.example vers .env et modifiez les informations nécessaire, le plus souvent la base de données et les informations de cloudflaire
-
-Ajouter les crons suivante : (en fonction de votre version de docker le nom sera soit fzoc_fpm_1 soit fzoc-fpm-1)
-
-```
-# Every minutes check for compilatio task
-* * * * * docker exec -it fzoc_fpm_1 php /usr/local/fzoc/www/crons/task_runner.php
-
-# Every hours check for firmware update
-0 * * * * docker exec -it fzoc_fpm_1 sh /usr/local/fzoc/www/crons/update_ufbt.sh
-
-# Every hours check for outdated application
-0 * * * * docker exec -it fzoc_fpm_1 php /usr/local/fzoc/www/crons/task_delete.php
-```
-Pour terminer, exécutez la commande pour lancer l'application (selon votre version de Docker, peut-être « docker compose » ou « docker-compose »)
-
-``` 
-docker-compose up -d 
+```ini
+BDD_PASSWORD=un_mot_de_passe_solide
 ```
 
-# No docker install
+### Exposition réseau
 
-[ENG]
+Par défaut, FZOC écoute uniquement sur localhost :
 
-You need to create a mariadb/mysql database with the create_db.sql script (be careful it does not create the database).
-
-Copy the file located in www/config_example.php to www/config.php and fill in the updated information for your configuration
-
-Add your vhost on apache2 or nginx (example file on git), and restart the service.
-
-Add the following crons (adjust the path to the files)
-
-
-```
-# Every minutes check for compilatio task
-* * * * * cd /var/www/fzoc/www/crons && php task_runner.php
-
-# Every hours check for firmware update
-0 * * * * cd /var/www/fzoc/www/crons && sh update_ufbt.sh
-
-# Every hours check for outdated application
-0 * * * * cd /var/www/fzoc/www/crons && php task_delete.php
+```ini
+EXPOSE_HOST=127.0.0.1
+EXPOSE_PORT=8090
 ```
 
-[FR]
+Si votre reverse proxy est sur une autre machine, utilisez :
 
-Après avoir cloné le dépôt sur votre serveur à l'emplacement désiré
-
-Vous devez créer une base de données mariadb/mysql avec le script create_db.sql (attention il ne créé pas la base).
-
-Copier le fichier qui se trouve dans www/config_example.php vers www/config.php et complétez les informations à jour pour votre configuration
-
-Ajouter votre vhost sur apache2 ou nginx (fichier exemple sur le git), et relancer le service.
-
-Ajouter les crons suivante (ajuster le chemin vers les fichiers)
-
-```
-# Every minutes check for compilatio task
-* * * * * cd /var/www/fzoc/www/crons && php task_runner.php
-
-# Every hours check for firmware update
-0 * * * * cd /var/www/fzoc/www/crons && sh update_ufbt.sh
-
-# Every hours check for outdated application
-0 * * * * cd /var/www/fzoc/www/crons && php task_delete.php
+```ini
+EXPOSE_HOST=0.0.0.0
+EXPOSE_PORT=8090
 ```
 
-# Update ?
+et limitez l'accès au port 8090 avec le firewall au seul reverse proxy.
 
-[ENG]
+### Lancement
 
-Feel free to pull request the install if needed!
+```bash
+docker compose up -d --build
+```
 
-[FR]
+Vérification :
 
-N'hésitez pas à pull request l'install si besoin !
+```bash
+docker compose ps
+docker compose logs -f http fpm worker
+```
+
+L'interface est disponible sur :
+
+```text
+http://127.0.0.1:8090
+```
+
+ou sur l'adresse correspondant à `EXPOSE_HOST`.
+
+## Aucun cron requis en Docker
+
+Le fork `ESI69190/fzoc` utilise un service Docker `worker` permanent.
+
+Il assure :
+
+- la consommation des tâches de compilation ;
+- la mise à jour périodique des SDK uFBT ;
+- le nettoyage des anciens builds ;
+- la conservation temporaire des logs de compilation.
+
+Les intervalles sont configurables dans `.env` :
+
+```ini
+FZOC_TASK_INTERVAL=2
+FZOC_MAINT_INTERVAL=3600
+```
+
+Il ne faut donc pas ajouter les anciens crons de l'upstream.
+
+## Permissions runtime
+
+Le worker initialise automatiquement les répertoires suivants :
+
+```text
+www/gits
+www/tasks
+www/tasks/running
+www/tasks/result
+www/public/faps
+```
+
+et applique les droits nécessaires à PHP-FPM.
+
+## Reverse proxy
+
+Le backend HTTP de FZOC reste en HTTP sur le port configuré par `EXPOSE_PORT`.
+Le TLS doit de préférence être terminé par Apache, Nginx, Traefik ou un autre reverse proxy.
+
+Exemple de cible :
+
+```text
+http://IP_DOCKER_FZOC:8090
+```
+
+## Mise à jour
+
+```bash
+git pull origin main
+docker compose up -d --build
+```
+
+Consultez ensuite :
+
+```bash
+docker compose logs --tail=100 worker
+```
+
+## Installation sans Docker
+
+L'installation sans Docker reste possible avec PHP 8.x, MariaDB/MySQL, Git et uFBT,
+mais le worker Docker et l'initialisation automatique des permissions ne s'appliquent pas.
+Dans ce mode, `www/worker_loop.sh` peut servir de référence pour mettre en place un service
+systemd permanent.

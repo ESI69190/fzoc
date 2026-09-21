@@ -1,0 +1,548 @@
+:root {
+    --brand-primary: #4F415D;
+    --brand-bg: #ECF0F5;
+    --brand-secondary: #484F51;
+    --brand-surface: #FFFFFF;
+    --brand-border: rgba(72, 79, 81, 0.18);
+    --brand-muted: rgba(72, 79, 81, 0.72);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    min-height: 100%;
+    background: var(--brand-secondary);
+    color: var(--brand-secondary);
+}
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+a {
+    color: var(--brand-primary);
+}
+
+a:hover {
+    color: var(--brand-secondary);
+}
+
+/* Header */
+.esi-topbar {
+    min-height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 0 3rem;
+    background: var(--brand-primary);
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(79, 65, 93, 0.16);
+}
+
+.esi-brand {
+    display: flex;
+    align-items: center;
+    gap: .85rem;
+    color: #fff;
+    text-decoration: none;
+}
+
+.esi-brand:hover {
+    color: #fff;
+    text-decoration: none;
+}
+
+.esi-logo {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 auto;
+    display: block;
+    object-fit: contain;
+}
+
+.esi-logo-large {
+    width: 88px;
+    height: 88px;
+}
+
+.esi-brand-text {
+    display: flex;
+    align-items: center;
+    line-height: 1;
+}
+
+.esi-brand-text strong {
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: .03em;
+}
+
+.esi-nav {
+    display: flex;
+    align-items: stretch;
+    align-self: stretch;
+}
+
+.esi-nav a {
+    display: flex;
+    align-items: center;
+    padding: 0 1.15rem;
+    color: rgba(255, 255, 255, .90);
+    text-decoration: none;
+    border-bottom: 3px solid transparent;
+}
+
+.esi-nav a:hover,
+.esi-nav a.active {
+    color: #fff;
+    background: rgba(255, 255, 255, .08);
+    border-bottom-color: #fff;
+}
+
+/* Main frame */
+.fz-shell {
+    max-width: 1180px;
+    min-height: calc(100vh - 74px);
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+    background: var(--brand-bg);
+}
+
+.fz-hero {
+    margin-bottom: 1.2rem;
+    padding: 2.1rem 2.2rem;
+    background: var(--brand-surface);
+    border: 1px solid var(--brand-border);
+}
+
+.fz-hero-brand {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.fz-hero h2 {
+    margin: .25rem 0 .6rem;
+    color: var(--brand-primary);
+    font-size: clamp(1.7rem, 3vw, 2.45rem);
+    font-weight: 700;
+    letter-spacing: .01em;
+}
+
+.fz-hero p {
+    max-width: 780px;
+    margin: 0;
+    color: var(--brand-secondary);
+    line-height: 1.65;
+}
+
+.fz-kicker {
+    color: var(--brand-secondary);
+    font-size: .76rem;
+    font-weight: 700;
+    letter-spacing: .14em;
+}
+
+.fz-dashboard {
+    margin-top: 0;
+}
+
+/* Cards */
+.fz-card {
+    height: auto;
+    overflow: hidden;
+    border: 1px solid var(--brand-border);
+    background: var(--brand-surface);
+    box-shadow: 0 8px 24px rgba(72, 79, 81, 0.06);
+}
+
+.fz-card .card-header {
+    padding: .95rem 1.15rem;
+    background: var(--brand-primary);
+    border-bottom: 0;
+}
+
+.fz-card-title {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    color: #fff;
+    font-size: 1.02rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .025em;
+}
+
+.fz-card-title .icon {
+    color: #fff;
+}
+
+/* Metro UI form controls:
+   let Metro own the geometry and style only the component wrapper. */
+.fz-shell label {
+    display: inline-block;
+    margin-bottom: .35rem;
+    color: var(--brand-secondary);
+    font-weight: 600;
+}
+
+.fz-shell .input {
+    width: 100%;
+    border: 1px solid var(--brand-border);
+    background: #fff;
+    color: var(--brand-secondary);
+}
+
+.fz-shell .input.focused {
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 3px rgba(79, 65, 93, .12);
+}
+
+.fz-shell .input .prepend,
+.fz-shell .input .append {
+    background: var(--brand-bg);
+    color: var(--brand-primary);
+    border-color: var(--brand-border);
+}
+
+.fz-shell .input input {
+    color: var(--brand-secondary);
+}
+
+/* Native Eyeshield dropdowns.
+   Deliberately not using Metro's data-role="select": the main Eyeshield
+   visual language is a simple flat form control, not a JS-generated menu. */
+.esi-select {
+    width: 100%;
+    height: 38px;
+    padding: 0 2.4rem 0 .75rem;
+    border: 1px solid rgba(72, 79, 81, .24);
+    border-radius: 0;
+    outline: 0;
+    background-color: #fff;
+    color: var(--brand-secondary);
+    font: inherit;
+    line-height: 38px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--brand-secondary) 50%),
+        linear-gradient(135deg, var(--brand-secondary) 50%, transparent 50%);
+    background-position:
+        calc(100% - 16px) 16px,
+        calc(100% - 11px) 16px;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    transition:
+        border-color .15s ease,
+        box-shadow .15s ease,
+        background-color .15s ease;
+}
+
+.esi-select:hover {
+    border-color: var(--brand-primary);
+}
+
+.esi-select:focus {
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 3px rgba(79, 65, 93, .12);
+}
+
+.esi-select option {
+    background: #fff;
+    color: var(--brand-secondary);
+}
+
+/* Metro button accent classes, recolored with the Eyeshield palette.
+   Sizing and spacing remain Metro's responsibility. */
+.fz-shell .button.primary {
+    background-color: var(--brand-primary);
+    border-color: var(--brand-primary);
+    color: #fff;
+}
+
+.fz-shell .button.primary:hover {
+    background-color: var(--brand-secondary);
+    border-color: var(--brand-secondary);
+    color: #fff;
+}
+
+.fz-shell .button.secondary,
+.fz-shell .button.alert {
+    background-color: var(--brand-secondary);
+    border-color: var(--brand-secondary);
+    color: #fff;
+}
+
+.fz-shell .button.secondary:hover,
+.fz-shell .button.alert:hover {
+    background-color: var(--brand-primary);
+    border-color: var(--brand-primary);
+    color: #fff;
+}
+
+.fz-shell .button.primary.outline {
+    background: transparent;
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
+}
+
+.fz-shell .button.primary.outline:hover {
+    background: var(--brand-primary);
+    color: #fff;
+}
+
+/* Feedback */
+.fz-message {
+    padding: .9rem 1rem;
+    border-left: 4px solid var(--brand-primary);
+    background: rgba(79, 65, 93, .08);
+    color: var(--brand-secondary);
+}
+
+.fz-message.error {
+    border-color: var(--brand-secondary);
+    background: rgba(72, 79, 81, .08);
+}
+
+/* Status */
+.fz-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 78px;
+    padding: .25rem .55rem;
+    border: 1px solid var(--brand-primary);
+    font-size: .76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.status-queued,
+.status-pending,
+.status-running {
+    background: rgba(79, 65, 93, .10);
+    color: var(--brand-primary);
+}
+
+.status-success {
+    background: var(--brand-primary);
+    color: #fff;
+}
+
+.status-error,
+.status-impossible,
+.status-deleted {
+    background: var(--brand-secondary);
+    border-color: var(--brand-secondary);
+    color: #fff;
+}
+
+/* Stats */
+.fz-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin: 1.2rem 0;
+    border: 1px solid var(--brand-border);
+    background: var(--brand-surface);
+}
+
+.fz-stat {
+    padding: 1.05rem 1.25rem;
+    border-right: 1px solid var(--brand-border);
+}
+
+.fz-stat:last-child {
+    border-right: 0;
+}
+
+.fz-stat-value {
+    color: var(--brand-primary);
+    font-size: 1.65rem;
+    font-weight: 700;
+}
+
+.fz-stat-label {
+    color: var(--brand-secondary);
+    font-size: .88rem;
+}
+
+/* Metro table */
+.fz-table {
+    margin: 0;
+}
+
+.fz-table thead {
+    border-bottom-color: var(--brand-primary);
+}
+
+.fz-table th {
+    background: var(--brand-bg);
+    color: var(--brand-secondary);
+    white-space: nowrap;
+    font-weight: 700;
+}
+
+.fz-table td {
+    color: var(--brand-secondary);
+}
+
+.fz-table.striped tbody tr:nth-child(even) {
+    background: rgba(236, 240, 245, .72);
+}
+
+.fz-table.row-hover tbody tr:hover {
+    background: rgba(79, 65, 93, .08);
+}
+
+.fz-repo-button {
+    max-width: 100%;
+    justify-content: flex-start;
+    font-weight: 600;
+}
+
+.fz-repo-button .icon {
+    flex: 0 0 auto;
+    font-size: 1rem;
+}
+
+.fz-repo-button span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fz-table-action {
+    min-width: 132px;
+    white-space: nowrap;
+}
+
+.fz-fap-button,
+.fz-progress-button,
+.fz-error-button {
+    min-width: 104px;
+}
+
+/* Footer */
+.fz-footer {
+    margin-top: 2rem;
+    padding: 1.5rem 0;
+    background: var(--brand-secondary);
+    color: var(--brand-bg);
+    font-size: .86rem;
+}
+
+.fz-footer-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 2rem;
+}
+
+.fz-footer strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+.fz-footer a {
+    color: var(--brand-bg);
+    text-decoration: none;
+}
+
+.fz-footer a:hover {
+    color: #fff;
+}
+
+.fz-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+}
+
+.text-muted {
+    color: var(--brand-muted) !important;
+}
+
+@media (max-width: 800px) {
+    .esi-topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: .5rem;
+        padding: 1rem 1.25rem 0;
+    }
+
+    .esi-nav {
+        width: 100%;
+        overflow-x: auto;
+    }
+
+    .esi-nav a {
+        min-height: 46px;
+        padding: 0 .8rem;
+    }
+
+    .fz-shell {
+        padding: 1rem .8rem 3rem;
+    }
+
+    .fz-hero {
+        padding: 1.4rem;
+    }
+
+    .fz-hero-brand {
+        align-items: flex-start;
+    }
+
+    .esi-logo-large {
+        width: 64px;
+        height: 64px;
+    }
+
+    .fz-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .fz-stat {
+        border-right: 0;
+        border-bottom: 1px solid var(--brand-border);
+    }
+
+    .fz-stat:last-child {
+        border-bottom: 0;
+    }
+
+    .fz-footer-inner {
+        flex-direction: column;
+    }
+}
+
+
+/* Metro-style horizontal hover animation.
+   Kept local so it works with the CSP-compatible Metro bundle. */
+.ani-hover-horizontal:hover {
+    animation: fz-ani-horizontal 2s ease infinite;
+}
+
+@keyframes fz-ani-horizontal {
+    0%   { transform: translate(0, 0); }
+    6%   { transform: translate(5px, 0); }
+    12%  { transform: translate(0, 0); }
+    18%  { transform: translate(5px, 0); }
+    24%  { transform: translate(0, 0); }
+    30%  { transform: translate(5px, 0); }
+    36%,
+    100% { transform: translate(0, 0); }
+}

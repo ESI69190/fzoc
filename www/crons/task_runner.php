@@ -1,68 +1,133 @@
 <?php
 
-//-- si jamais on a pas le config.php on peut prendre le example notamment pour docker
-if( !is_file( __DIR__.'/../config.php' ) ){
+declare(strict_types=1);
 
-    require_once( __DIR__.'/../config_example.php' );
-}
-else{
-
-    require_once( __DIR__.'/../config.php' );
+if (!is_file(__DIR__ . '/../config.php')) {
+    require_once __DIR__ . '/../config_example.php';
+} else {
+    require_once __DIR__ . '/../config.php';
 }
 
-//-- on va parcourir notre dossier pour réaliser les compilations
-$pending_task = scandir( $task_list );
+$runningDir = rtrim($task_list, '/') . '/running/';
+$resultDir  = rtrim($task_list, '/') . '/result/';
 
-unset( $pending_task[0], $pending_task[1]);
+foreach ([$task_list, $runningDir, $resultDir, $fap_path, __DIR__ . '/../gits/'] as $dir) {
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+}
 
-$sql_update_compiled_query = 'UPDATE fzco_compiled SET compiled_status=:new_status WHERE compiled_path_fap = :compiled_path';
+$pendingTasks = scandir($task_list);
+if ($pendingTasks === false) {
+    exit(0);
+}
 
-foreach( $pending_task ?? [] as $task_waiting ){
+$updateStatus = $bdd_connexion->prepare('
+    UPDATE fzco_compiled
+    SET compiled_status = :new_status
+    WHERE compiled_path_fap = :compiled_path
+');
 
-    if( !is_dir( $task_list.$task_waiting ) ){
+$appForBuild = $bdd_connexion->prepare('
+    SELECT a.application_appid
+    FROM fzco_compiled c
+    INNER JOIN fzco_application a
+        ON a.application_id = c.compiled_application_id
+    WHERE c.compiled_path_fap = :compiled_path
+    LIMIT 1
+');
 
-        if( rename( $task_list.$task_waiting, $task_list.'running/'.$task_waiting ) ) {
+foreach ($pendingTasks as $taskWaiting) {
+    if ($taskWaiting === '.' || $taskWaiting === '..' || str_starts_with($taskWaiting, '.')) {
+        continue;
+    }
 
-            $result_file = $task_list.'result/'.str_replace('.sh','',$task_waiting).'.result';
-            shell_exec( 'sh '.$task_list.'running/'.$task_waiting .' 2> '.$result_file );
+    $sourceTask = rtrim($task_list, '/') . '/' . $taskWaiting;
+    if (!is_file($sourceTask) || !str_ends_with($taskWaiting, '.sh')) {
+        continue;
+    }
 
-            //-- on récupère le contenu du resutl si on trouve "Found nothing to build" on le met en "build impossible"
-            //-- update le status pour chaque tache
-            // remove les gits
+    $runningTask = $runningDir . $taskWaiting;
 
-            $sql_update_compiled = $bdd_connexion->prepare( $sql_update_compiled_query );
+    if (!@rename($sourceTask, $runningTask)) {
+        continue;
+    }
 
-            $check_result          = file_get_contents( $result_file );
-            $correct_compiled_path = str_replace( ['_', '.sh'], ['/',''] , $task_waiting );
+    $jobName = pathinfo($taskWaiting, PATHINFO_FILENAME);
+    $separator = strrpos($jobName, '_');
 
-		var_dump($check_result);
+    if ($separator === false) {
+        @unlink($runningTask);
+        continue;
+    }
 
-            if( preg_match('/Found nothing to build/iu', $check_result) ){
+    $compiledPath = substr($jobName, 0, $separator) . '/' . substr($jobName, $separator + 1);
+    $resultFile = $resultDir . $jobName . '.result';
 
-                $sql_update_compiled->execute( ['new_status' => 'impossible', 'compiled_path' => $correct_compiled_path ] );
-            } 
-            else if( preg_match('/error/iu', $check_result) || preg_match('/Failed parsing manifest/iu', $check_result) ){
+    $exitCode = 0;
 
-                $sql_update_compiled->execute( ['new_status' => 'error', 'compiled_path' => $correct_compiled_path ] );
-            }
-            else{
+    // Redirect stdout/stderr directly to the result file so the XHR status
+    // endpoint can expose build logs while uFBT is still running.
+    exec(
+        'sh ' . escapeshellarg($runningTask)
+        . ' > ' . escapeshellarg($resultFile)
+        . ' 2>&1',
+        $ignoredOutput,
+        $exitCode
+    );
 
-                $sql_update_compiled->execute( ['new_status' => 'success', 'compiled_path' => $correct_compiled_path ] );
-            }
+    $log = is_file($resultFile) ? (string) file_get_contents($resultFile) : '';
+    file_put_contents(
+        $resultFile,
+        sprintf(
+            "%s[FZOC] finished_at=%s exit_code=%d%s",
+            PHP_EOL,
+            date(DATE_ATOM),
+            $exitCode,
+            PHP_EOL
+        ),
+        FILE_APPEND | LOCK_EX
+    );
 
-            //-- on supprime le répertoire clonné il n'est plus utile
-            shell_exec( 'rm -rf ../gits/'.$correct_compiled_path );
+    $status = 'success';
 
-            //-- on retire la tache et le fichier result don nous n'avons plus besoin
-            shell_exec( 'rm -rf '.$task_list.'running/'.$task_waiting);
-            shell_exec( 'rm -rf '.$result_file);
-        }
-        else{
+    if (stripos($log, 'Found nothing to build') !== false) {
+        $status = 'impossible';
+    } elseif (
+        $exitCode !== 0
+        || stripos($log, 'Failed parsing manifest') !== false
+        || preg_match('/(^|\s)(error|fatal)(:|\s)/i', $log)
+    ) {
+        $status = 'error';
+    }
 
-            echo 'error move';
+    if ($status === 'success') {
+        $appForBuild->execute(['compiled_path' => $compiledPath]);
+        $applicationAppId = $appForBuild->fetchColumn();
+
+        $expectedFap = $applicationAppId
+            ? rtrim($fap_path, '/') . '/' . $compiledPath . '/' . $applicationAppId . '.fap'
+            : null;
+
+        if ($expectedFap === null || !is_file($expectedFap)) {
+            $status = 'error';
+            file_put_contents(
+                $resultFile,
+                "[FZOC] Build command finished without producing the expected .fap file." . PHP_EOL,
+                FILE_APPEND | LOCK_EX
+            );
         }
     }
-    else{
-		//echo 'error dir: '.$task_list.$task_waiting.PHP_EOL;
+
+    $updateStatus->execute([
+        'new_status' => $status,
+        'compiled_path' => $compiledPath,
+    ]);
+
+    $gitPath = __DIR__ . '/../gits/' . $compiledPath;
+    if (is_dir($gitPath)) {
+        exec('rm -rf -- ' . escapeshellarg($gitPath));
     }
+
+    @unlink($runningTask);
 }
