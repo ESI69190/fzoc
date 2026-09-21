@@ -19,6 +19,10 @@ DEBUG=false
 # uFBT - do not change when using Docker
 UFBT_PATH=/usr/local/fzoc/ufbt/
 
+# Build cache
+# Increment to invalidate all cached FAPs after a compiler/toolchain change.
+FZOC_BUILD_ENGINE_VERSION=1
+
 # Worker
 FZOC_TASK_INTERVAL=2
 FZOC_MAINT_INTERVAL=3600

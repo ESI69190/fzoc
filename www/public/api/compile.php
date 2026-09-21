@@ -15,6 +15,9 @@ if (!is_file(__DIR__ . '/../../config.php')) {
 } else {
     require_once __DIR__ . '/../../config.php';
 }
+require_once __DIR__ . '/../../class/fzcoBuildQueue.class.php';
+
+fzcoEnsureBuildQueueSchema($bdd_connexion);
 
 set_error_handler(
     static function (int $severity, string $message, string $file, int $line): bool {
@@ -44,7 +47,6 @@ set_exception_handler(
         }
 
         http_response_code(500);
-
         echo json_encode([
             'ok' => false,
             'error' => 'internal_error',
@@ -52,7 +54,6 @@ set_exception_handler(
             'error_id' => $errorId,
             'details' => $debug ? $exception->getMessage() : null,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
         exit;
     }
 );
@@ -64,37 +65,11 @@ function json_response(array $payload, int $status = 200): never
     exit;
 }
 
-function remove_tree(string $path): void
-{
-    if (!is_dir($path)) {
-        return;
-    }
-
-    $items = scandir($path);
-    if ($items === false) {
-        return;
-    }
-
-    foreach ($items as $item) {
-        if ($item === '.' || $item === '..') {
-            continue;
-        }
-
-        $target = $path . DIRECTORY_SEPARATOR . $item;
-        if (is_dir($target) && !is_link($target)) {
-            remove_tree($target);
-        } else {
-            @unlink($target);
-        }
-    }
-
-    @rmdir($path);
-}
-
 function detect_repository(string $url): array|false
 {
     if (preg_match('~^https://github\.com/([^/]+)/([^/?#]+?)(?:\.git)?/?$~i', $url, $m)) {
         $repo = preg_replace('/\.git$/i', '', $m[2]);
+
         return [
             'provider' => 'github',
             'clone_url' => 'https://github.com/' . $m[1] . '/' . $repo . '.git',
@@ -141,20 +116,43 @@ function detect_default_branch(string $cloneUrl): string
     return 'main';
 }
 
-function fetch_application_fam(array $repository, string $branch): array
+function resolve_remote_commit(string $cloneUrl, string $branch): string|false
+{
+    $output = [];
+    $exitCode = 0;
+
+    exec(
+        'git ls-remote ' . escapeshellarg($cloneUrl)
+        . ' ' . escapeshellarg('refs/heads/' . $branch)
+        . ' 2>/dev/null',
+        $output,
+        $exitCode
+    );
+
+    if ($exitCode !== 0 || count($output) < 1) {
+        return false;
+    }
+
+    $parts = preg_split('/\s+/', trim($output[0]));
+    $sha = strtolower((string) ($parts[0] ?? ''));
+
+    return preg_match('/^[a-f0-9]{40,64}$/', $sha) ? $sha : false;
+}
+
+function fetch_application_fam(array $repository, string $revision): array
 {
     if ($repository['provider'] === 'github') {
         $url = sprintf(
             'https://raw.githubusercontent.com/%s/%s/%s/application.fam',
             rawurlencode($repository['owner']),
             rawurlencode($repository['repo']),
-            rawurlencode($branch)
+            rawurlencode($revision)
         );
     } else {
         $url = sprintf(
             'https://gitlab.com/%s/-/raw/%s/application.fam',
             $repository['path'],
-            rawurlencode($branch)
+            rawurlencode($revision)
         );
     }
 
@@ -210,7 +208,50 @@ function verify_turnstile(string $secret, string $response): bool
     }
 
     $decoded = json_decode($body, true);
+
     return is_array($decoded) && ($decoded['success'] ?? false) === true;
+}
+
+function build_task_script(
+    string $gitUrl,
+    string $commit,
+    string $cloneDir,
+    string $stateDir,
+    string $versionType,
+    string $updateUrl,
+    string $outputDir,
+    string $outputFap
+): string {
+    $lines = [
+        '#!/bin/sh',
+        'set -eu',
+        'rm -rf -- ' . escapeshellarg($cloneDir),
+        'mkdir -p ' . escapeshellarg(dirname($cloneDir)),
+        'git init -q ' . escapeshellarg($cloneDir),
+        'git -C ' . escapeshellarg($cloneDir) . ' remote add origin ' . escapeshellarg($gitUrl),
+        'git -C ' . escapeshellarg($cloneDir) . ' fetch -q --depth 1 origin ' . escapeshellarg($commit),
+        'git -C ' . escapeshellarg($cloneDir) . ' checkout -q --detach FETCH_HEAD',
+        'cd ' . escapeshellarg(rtrim($GLOBALS['path_to_ufbt'], '/')),
+        '. bin/activate',
+        'cd ' . escapeshellarg($cloneDir),
+        'ufbt dotenv_create --state-dir ' . escapeshellarg($stateDir),
+    ];
+
+    $updateCommand = 'ufbt update';
+    if ($versionType === 'dev') {
+        $updateCommand .= ' --channel dev';
+    }
+    $updateCommand .= ' --index-url=' . escapeshellarg($updateUrl);
+
+    $lines[] = $updateCommand;
+    $lines[] = 'ufbt';
+    $lines[] = 'mkdir -p ' . escapeshellarg($outputDir);
+    $lines[] = 'FAP_FILE="$(find dist -maxdepth 1 -type f -name \'*.fap\' | head -n 1)"';
+    $lines[] = 'test -n "$FAP_FILE"';
+    $lines[] = 'mv -f "$FAP_FILE" ' . escapeshellarg($outputFap);
+    $lines[] = '';
+
+    return implode("\n", $lines);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -260,13 +301,23 @@ if ($is_active_cloudflare_turnstile) {
 }
 
 $defaultBranch = detect_default_branch($gitUrl);
-[$famBody, $famUrl, $famError] = fetch_application_fam($repository, $defaultBranch);
+$remoteCommit = resolve_remote_commit($gitUrl, $defaultBranch);
+
+if ($remoteCommit === false) {
+    json_response([
+        'ok' => false,
+        'error' => 'git_revision_unavailable',
+        'message' => 'Impossible de déterminer la révision actuelle du dépôt.',
+    ], 422);
+}
+
+[$famBody, $famUrl, $famError] = fetch_application_fam($repository, $remoteCommit);
 
 if ($famBody === false) {
     json_response([
         'ok' => false,
         'error' => 'application_fam_not_found',
-        'message' => 'application.fam est introuvable à la racine de la branche par défaut.',
+        'message' => 'application.fam est introuvable à la racine de la révision demandée.',
         'details' => $debug ? ['url' => $famUrl, 'error' => $famError] : null,
     ], 422);
 }
@@ -308,6 +359,7 @@ $firmwareQuery = $bdd_connexion->prepare('
         f.firmware_ufbt_path,
         fv.firmware_version_id,
         fv.firmware_version_name,
+        fv.firmware_version_update_date,
         fv.firmware_version_type
     FROM fzco_firmware f
     INNER JOIN fzco_depend d
@@ -334,181 +386,253 @@ if (!$firmware) {
     ], 422);
 }
 
-$timestamp = time();
-$repoHash = md5($gitUrl);
-$relativePath = $repoHash . '/' . $timestamp;
-$jobId = $repoHash . '_' . $timestamp;
-$destinationDir = __DIR__ . '/../../gits/' . $relativePath;
-$cloneDir = $destinationDir . '/new';
+$engineVersion = (string) ($build_engine_version ?? '1');
 
-if (!is_dir($destinationDir) && !mkdir($destinationDir, 0775, true) && !is_dir($destinationDir)) {
-    json_response([
-        'ok' => false,
-        'error' => 'runtime_permissions',
-        'message' => 'Impossible de créer le répertoire de travail. Vérifiez les permissions de www/gits.',
-    ], 500);
-}
+$buildKeyMaterial = [
+    'repository' => $gitUrl,
+    'branch' => $defaultBranch,
+    'commit' => $remoteCommit,
+    'firmware_id' => (int) $firmware['firmware_id'],
+    'firmware_version_id' => (int) $firmware['firmware_version_id'],
+    'firmware_version' => $firmware['firmware_version_name'],
+    'firmware_stamp' => $firmware['firmware_version_update_date'],
+    'firmware_update_url' => $firmware['firmware_url_update'],
+    'channel' => $versionType,
+    'engine' => $engineVersion,
+];
 
-$cloneOutput = [];
-$cloneExit = 0;
-exec(
-    'git clone --depth 1 ' . escapeshellarg($gitUrl) . ' ' . escapeshellarg($cloneDir) . ' 2>&1',
-    $cloneOutput,
-    $cloneExit
+$buildKey = hash(
+    'sha256',
+    json_encode($buildKeyMaterial, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
 );
 
-if ($cloneExit !== 0) {
-    remove_tree($destinationDir);
-    json_response([
-        'ok' => false,
-        'error' => 'git_clone_failed',
-        'message' => 'Le dépôt n’a pas pu être cloné.',
-        'details' => $debug ? implode("\n", $cloneOutput) : null,
-    ], 422);
-}
+$now = date('Y-m-d H:i:s');
+$newPublicId = bin2hex(random_bytes(16));
+$buildPath = 'cache/' . substr($buildKey, 0, 2) . '/' . $buildKey;
 
-$applicationQuery = $bdd_connexion->prepare('
-    SELECT application_id
-    FROM fzco_application
-    WHERE application_url_git = :git_url
-    LIMIT 1
+$insertJob = $bdd_connexion->prepare('
+    INSERT INTO fzco_build_job (
+        public_job_id,
+        build_key,
+        application_name,
+        application_appid,
+        application_url_git,
+        repository_branch,
+        repository_commit,
+        firmware_id,
+        firmware_name,
+        firmware_version_id,
+        firmware_version_name,
+        firmware_version_stamp,
+        sdk_channel,
+        engine_version,
+        build_path,
+        build_status,
+        priority,
+        request_count,
+        created_at,
+        queued_at,
+        last_requested_at
+    ) VALUES (
+        :public_job_id,
+        :build_key,
+        :application_name,
+        :application_appid,
+        :application_url_git,
+        :repository_branch,
+        :repository_commit,
+        :firmware_id,
+        :firmware_name,
+        :firmware_version_id,
+        :firmware_version_name,
+        :firmware_version_stamp,
+        :sdk_channel,
+        :engine_version,
+        :build_path,
+        "queued",
+        0,
+        1,
+        :created_at,
+        :queued_at,
+        :last_requested_at
+    )
+    ON DUPLICATE KEY UPDATE
+        build_job_id = LAST_INSERT_ID(build_job_id),
+        request_count = request_count + 1,
+        last_requested_at = VALUES(last_requested_at),
+        application_name = VALUES(application_name),
+        application_appid = VALUES(application_appid)
 ');
-$applicationQuery->execute(['git_url' => $gitUrl]);
-$applicationId = $applicationQuery->fetchColumn();
+
+$selectJob = $bdd_connexion->prepare('
+    SELECT *
+    FROM fzco_build_job
+    WHERE build_job_id = :id
+    FOR UPDATE
+');
+
+$insertRequest = $bdd_connexion->prepare('
+    INSERT INTO fzco_build_request (
+        request_id,
+        build_job_id,
+        requested_at
+    ) VALUES (
+        :request_id,
+        :build_job_id,
+        :requested_at
+    )
+');
+
+$resetJob = $bdd_connexion->prepare('
+    UPDATE fzco_build_job
+    SET build_status = "queued",
+        queued_at = :queued_at,
+        started_at = NULL,
+        finished_at = NULL,
+        error_code = NULL
+    WHERE build_job_id = :id
+');
+
+$taskMustBeCreated = false;
+$cacheHit = false;
+$deduplicated = false;
+$job = null;
 
 try {
     $bdd_connexion->beginTransaction();
 
-    if ($applicationId === false) {
-        $insertApplication = $bdd_connexion->prepare('
-            INSERT INTO fzco_application (
-                application_name,
-                application_appid,
-                application_url_git
-            ) VALUES (
-                :name,
-                :appid,
-                :git_url
-            )
-        ');
-        $insertApplication->execute([
-            'name' => $appName,
-            'appid' => $appId,
-            'git_url' => $gitUrl,
-        ]);
-        $applicationId = (int) $bdd_connexion->lastInsertId();
-    } else {
-        $applicationId = (int) $applicationId;
+    $insertJob->execute([
+        'public_job_id' => $newPublicId,
+        'build_key' => $buildKey,
+        'application_name' => $appName,
+        'application_appid' => $appId,
+        'application_url_git' => $gitUrl,
+        'repository_branch' => $defaultBranch,
+        'repository_commit' => $remoteCommit,
+        'firmware_id' => (int) $firmware['firmware_id'],
+        'firmware_name' => $firmware['firmware_name'],
+        'firmware_version_id' => (int) $firmware['firmware_version_id'],
+        'firmware_version_name' => $firmware['firmware_version_name'],
+        'firmware_version_stamp' => $firmware['firmware_version_update_date'],
+        'sdk_channel' => $versionType,
+        'engine_version' => $engineVersion,
+        'build_path' => $buildPath,
+        'created_at' => $now,
+        'queued_at' => $now,
+        'last_requested_at' => $now,
+    ]);
 
-        $updateApplication = $bdd_connexion->prepare('
-            UPDATE fzco_application
-            SET application_name = :name,
-                application_appid = :appid
-            WHERE application_id = :id
-        ');
-        $updateApplication->execute([
-            'name' => $appName,
-            'appid' => $appId,
-            'id' => $applicationId,
-        ]);
+    $wasInserted = $insertJob->rowCount() === 1;
+    $buildJobId = (int) $bdd_connexion->lastInsertId();
+
+    $selectJob->execute(['id' => $buildJobId]);
+    $job = $selectJob->fetch(PDO::FETCH_ASSOC);
+
+    if (!$job) {
+        throw new RuntimeException('Unable to reload build job');
     }
 
-    $insertCompiled = $bdd_connexion->prepare('
-        INSERT INTO fzco_compiled (
-            compiled_firmware_version_id,
-            compiled_application_id,
-            compiled_date,
-            compiled_path_fap,
-            compiled_status
-        ) VALUES (
-            :firmware_version_id,
-            :application_id,
-            :compiled_date,
-            :compiled_path,
-            "pending"
-        )
-    ');
-    $insertCompiled->execute([
-        'firmware_version_id' => (int) $firmware['firmware_version_id'],
-        'application_id' => $applicationId,
-        'compiled_date' => date('Y-m-d H:i:s', $timestamp),
-        'compiled_path' => $relativePath,
+    $insertRequest->execute([
+        'request_id' => bin2hex(random_bytes(16)),
+        'build_job_id' => $buildJobId,
+        'requested_at' => $now,
     ]);
+
+    $expectedFap = rtrim($fap_path, '/') . '/'
+        . $job['build_path'] . '/'
+        . $job['application_appid'] . '.fap';
+
+    if (!$wasInserted && $job['build_status'] === 'success' && is_file($expectedFap)) {
+        $cacheHit = true;
+    } elseif (!$wasInserted && in_array($job['build_status'], ['queued', 'running'], true)) {
+        $deduplicated = true;
+    } else {
+        if (!$wasInserted) {
+            $resetJob->execute([
+                'queued_at' => $now,
+                'id' => $buildJobId,
+            ]);
+            $job['build_status'] = 'queued';
+            $job['queued_at'] = $now;
+        }
+
+        $taskMustBeCreated = true;
+    }
+
+    if ($taskMustBeCreated) {
+        $publicId = (string) $job['public_job_id'];
+        $cloneDir = __DIR__ . '/../../gits/' . $publicId . '/new';
+        $stateDir = rtrim($path_to_ufbt, '/') . '/fz_'
+            . $firmware['firmware_ufbt_path'] . '_' . $versionType;
+        $outputDir = rtrim($fap_path, '/') . '/' . $job['build_path'];
+        $outputFap = $outputDir . '/' . $appId . '.fap';
+
+        $taskFile = rtrim($task_list, '/') . '/' . $publicId . '.sh';
+        $tempTaskFile = rtrim($task_list, '/') . '/.' . $publicId . '.tmp';
+
+        $taskBody = build_task_script(
+            $gitUrl,
+            $remoteCommit,
+            $cloneDir,
+            $stateDir,
+            $versionType,
+            $firmware['firmware_url_update'],
+            $outputDir,
+            $outputFap
+        );
+
+        if (file_put_contents($tempTaskFile, $taskBody, LOCK_EX) === false
+            || !chmod($tempTaskFile, 0755)
+            || !rename($tempTaskFile, $taskFile)) {
+            @unlink($tempTaskFile);
+            @unlink($taskFile);
+            throw new RuntimeException('Unable to create build task');
+        }
+    }
 
     $bdd_connexion->commit();
 } catch (Throwable $e) {
     if ($bdd_connexion->inTransaction()) {
         $bdd_connexion->rollBack();
     }
-    remove_tree($destinationDir);
 
     json_response([
         'ok' => false,
-        'error' => 'database_error',
-        'message' => 'La demande n’a pas pu être enregistrée.',
+        'error' => 'queue_error',
+        'message' => 'La demande n’a pas pu être ajoutée à la file de compilation.',
         'details' => $debug ? $e->getMessage() : null,
     ], 500);
 }
 
-$stateDir = rtrim($path_to_ufbt, '/') . '/fz_' . $firmware['firmware_ufbt_path'] . '_' . $versionType;
-$outputDir = rtrim($fap_path, '/') . '/' . $relativePath;
-$outputFap = $outputDir . '/' . $appId . '.fap';
+$queuePosition = null;
+$currentStatus = (string) $job['build_status'];
 
-$taskLines = [
-    '#!/bin/sh',
-    'set -eu',
-    'cd ' . escapeshellarg(rtrim($path_to_ufbt, '/')),
-    '. bin/activate',
-    'cd ' . escapeshellarg($cloneDir),
-    'ufbt dotenv_create --state-dir ' . escapeshellarg($stateDir),
-];
-
-$updateCommand = 'ufbt update';
-if ($versionType === 'dev') {
-    $updateCommand .= ' --channel dev';
+if ($cacheHit) {
+    $currentStatus = 'success';
+} elseif ($currentStatus === 'queued') {
+    $queuePosition = fzcoQueuePosition($bdd_connexion, (int) $job['build_job_id']);
 }
-$updateCommand .= ' --index-url=' . escapeshellarg($firmware['firmware_url_update']);
-$taskLines[] = $updateCommand;
-$taskLines[] = 'ufbt';
-$taskLines[] = 'mkdir -p ' . escapeshellarg($outputDir);
-$taskLines[] = 'FAP_FILE="$(find dist -maxdepth 1 -type f -name \'*.fap\' | head -n 1)"';
-$taskLines[] = 'test -n "$FAP_FILE"';
-$taskLines[] = 'mv "$FAP_FILE" ' . escapeshellarg($outputFap);
-$taskLines[] = '';
 
-$taskFile = rtrim($task_list, '/') . '/' . $jobId . '.sh';
-$tempTaskFile = rtrim($task_list, '/') . '/.' . $jobId . '.tmp';
-
-if (file_put_contents($tempTaskFile, implode("\n", $taskLines), LOCK_EX) === false
-    || !chmod($tempTaskFile, 0755)
-    || !rename($tempTaskFile, $taskFile)) {
-    @unlink($tempTaskFile);
-    @unlink($taskFile);
-    remove_tree($destinationDir);
-
-    $cleanup = $bdd_connexion->prepare('
-        DELETE FROM fzco_compiled
-        WHERE compiled_path_fap = :path
-          AND compiled_status = "pending"
-    ');
-    $cleanup->execute(['path' => $relativePath]);
-
-    json_response([
-        'ok' => false,
-        'error' => 'runtime_permissions',
-        'message' => 'Impossible de créer la tâche de compilation. Vérifiez les permissions de www/tasks.',
-    ], 500);
+$download = null;
+if ($cacheHit) {
+    $download = '/faps/' . $job['build_path'] . '/' . rawurlencode($appId) . '.fap';
 }
 
 json_response([
     'ok' => true,
-    'job' => $jobId,
-    'status' => 'queued',
+    'job' => $job['public_job_id'],
+    'status' => $currentStatus,
+    'queue_position' => $queuePosition,
+    'cache_hit' => $cacheHit,
+    'deduplicated' => $deduplicated,
+    'request_count' => (int) $job['request_count'],
+    'download' => $download,
     'application' => [
         'name' => $appName,
         'appid' => $appId,
         'repository' => $gitUrl,
         'branch' => $defaultBranch,
+        'commit' => $remoteCommit,
     ],
     'firmware' => [
         'name' => $firmware['firmware_name'],

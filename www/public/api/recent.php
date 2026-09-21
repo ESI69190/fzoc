@@ -10,8 +10,68 @@ if (!is_file(__DIR__ . '/../../config.php')) {
 } else {
     require_once __DIR__ . '/../../config.php';
 }
+require_once __DIR__ . '/../../class/fzcoBuildQueue.class.php';
 
-$query = $bdd_connexion->query('
+fzcoEnsureBuildQueueSchema($bdd_connexion);
+
+$queuePositions = [];
+$queueQuery = $bdd_connexion->query(
+    "SELECT build_job_id
+     FROM fzco_build_job
+     WHERE build_status = 'queued'
+     ORDER BY priority DESC, request_count DESC, queued_at ASC, build_job_id ASC"
+);
+
+$position = 0;
+foreach ($queueQuery->fetchAll(PDO::FETCH_COLUMN) as $queuedId) {
+    $queuePositions[(int) $queuedId] = ++$position;
+}
+
+$newQuery = $bdd_connexion->query('
+    SELECT *
+    FROM fzco_build_job
+    ORDER BY last_requested_at DESC
+    LIMIT 50
+');
+
+$items = [];
+
+foreach ($newQuery->fetchAll(PDO::FETCH_ASSOC) as $row) {
+    $download = null;
+
+    if ($row['build_status'] === 'success') {
+        $file = rtrim($fap_path, '/') . '/'
+            . $row['build_path'] . '/'
+            . $row['application_appid'] . '.fap';
+
+        if (is_file($file)) {
+            $download = '/faps/' . $row['build_path'] . '/'
+                . rawurlencode($row['application_appid']) . '.fap';
+        }
+    }
+
+    $items[] = [
+        'job' => $row['public_job_id'],
+        'date' => $row['last_requested_at'],
+        'status' => $row['build_status'],
+        'queue_position' => $queuePositions[(int) $row['build_job_id']] ?? null,
+        'request_count' => (int) $row['request_count'],
+        'application' => [
+            'name' => $row['application_name'],
+            'appid' => $row['application_appid'],
+            'repository' => $row['application_url_git'],
+            'commit' => $row['repository_commit'],
+        ],
+        'firmware' => [
+            'name' => $row['firmware_name'],
+            'version' => $row['firmware_version_name'],
+            'channel' => $row['sdk_channel'],
+        ],
+        'download' => $download,
+    ];
+}
+
+$legacyQuery = $bdd_connexion->query('
     SELECT
         c.compiled_date,
         c.compiled_status,
@@ -35,9 +95,7 @@ $query = $bdd_connexion->query('
     LIMIT 50
 ');
 
-$items = [];
-
-foreach ($query->fetchAll(PDO::FETCH_ASSOC) as $row) {
+foreach ($legacyQuery->fetchAll(PDO::FETCH_ASSOC) as $row) {
     $job = str_replace('/', '_', $row['compiled_path_fap']);
     $status = $row['compiled_status'];
 
@@ -51,9 +109,13 @@ foreach ($query->fetchAll(PDO::FETCH_ASSOC) as $row) {
 
     $download = null;
     if ($row['compiled_status'] === 'success') {
-        $file = rtrim($fap_path, '/') . '/' . $row['compiled_path_fap'] . '/' . $row['application_appid'] . '.fap';
+        $file = rtrim($fap_path, '/') . '/'
+            . $row['compiled_path_fap'] . '/'
+            . $row['application_appid'] . '.fap';
+
         if (is_file($file)) {
-            $download = '/faps/' . $row['compiled_path_fap'] . '/' . rawurlencode($row['application_appid']) . '.fap';
+            $download = '/faps/' . $row['compiled_path_fap'] . '/'
+                . rawurlencode($row['application_appid']) . '.fap';
         }
     }
 
@@ -61,10 +123,13 @@ foreach ($query->fetchAll(PDO::FETCH_ASSOC) as $row) {
         'job' => $job,
         'date' => $row['compiled_date'],
         'status' => $status,
+        'queue_position' => null,
+        'request_count' => 1,
         'application' => [
             'name' => $row['application_name'],
             'appid' => $row['application_appid'],
             'repository' => $row['application_url_git'],
+            'commit' => null,
         ],
         'firmware' => [
             'name' => $row['firmware_name'],
@@ -75,26 +140,44 @@ foreach ($query->fetchAll(PDO::FETCH_ASSOC) as $row) {
     ];
 }
 
-$total = (int) $bdd_connexion->query('SELECT COUNT(*) FROM fzco_compiled')->fetchColumn();
+usort(
+    $items,
+    static fn(array $a, array $b): int => strcmp($b['date'], $a['date'])
+);
+$items = array_slice($items, 0, 50);
 
-$monthQuery = $bdd_connexion->prepare('
-    SELECT COUNT(*)
-    FROM fzco_compiled
-    WHERE compiled_date >= :month_start
-');
-$monthQuery->execute(['month_start' => date('Y-m-01 00:00:00')]);
-$thisMonth = (int) $monthQuery->fetchColumn();
+$legacyTotal = (int) $bdd_connexion->query('SELECT COUNT(*) FROM fzco_compiled')->fetchColumn();
+$newTotal = (int) $bdd_connexion->query('SELECT COUNT(*) FROM fzco_build_job')->fetchColumn();
 
-$success = (int) $bdd_connexion->query(
+$monthStart = date('Y-m-01 00:00:00');
+
+$legacyMonth = $bdd_connexion->prepare(
+    'SELECT COUNT(*) FROM fzco_compiled WHERE compiled_date >= :month_start'
+);
+$legacyMonth->execute(['month_start' => $monthStart]);
+
+$newMonth = $bdd_connexion->prepare(
+    'SELECT COUNT(*) FROM fzco_build_job WHERE created_at >= :month_start'
+);
+$newMonth->execute(['month_start' => $monthStart]);
+
+$legacySuccess = (int) $bdd_connexion->query(
     'SELECT COUNT(*) FROM fzco_compiled WHERE compiled_status = "success"'
+)->fetchColumn();
+
+$newSuccess = (int) $bdd_connexion->query(
+    'SELECT COUNT(*) FROM fzco_build_job WHERE build_status = "success"'
 )->fetchColumn();
 
 echo json_encode([
     'ok' => true,
     'stats' => [
-        'total' => $total,
-        'this_month' => $thisMonth,
-        'success' => $success,
+        'total' => $legacyTotal + $newTotal,
+        'this_month' => (int) $legacyMonth->fetchColumn() + (int) $newMonth->fetchColumn(),
+        'success' => $legacySuccess + $newSuccess,
+    ],
+    'queue' => [
+        'waiting' => count($queuePositions),
     ],
     'items' => $items,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

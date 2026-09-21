@@ -13,6 +13,9 @@ $debug = filter_var(getenv('DEBUG') ?: 'false', FILTER_VALIDATE_BOOLEAN);
 // uFBT configuration
 $path_to_ufbt = getenv('UFBT_PATH') ?: __DIR__ . '/ufbt/';
 
+// Build/cache identity. Increment this value when the build environment changes.
+$build_engine_version = getenv('FZOC_BUILD_ENGINE_VERSION') ?: '1';
+
 // Runtime paths
 $task_list         = __DIR__ . '/tasks/';
 $path_task_updates = __DIR__ . '/tasks_update/';
