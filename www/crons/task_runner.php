@@ -8,6 +8,7 @@ if (!is_file(__DIR__ . '/../config.php')) {
     require_once __DIR__ . '/../config.php';
 }
 require_once __DIR__ . '/../class/fzcoBuildQueue.class.php';
+require_once __DIR__ . '/../class/fzcoTime.class.php';
 
 fzcoEnsureBuildQueueSchema($bdd_connexion);
 
@@ -119,7 +120,7 @@ function run_new_queue_job(
         sprintf(
             "%s[FZOC] finished_at=%s exit_code=%d%s",
             PHP_EOL,
-            date(DATE_ATOM),
+            fzcoDisplayNowIso(),
             $exitCode,
             PHP_EOL
         ),
@@ -129,7 +130,16 @@ function run_new_queue_job(
     $status = 'success';
     $errorCode = null;
 
-    if (stripos($log, 'Found nothing to build') !== false) {
+    if (stripos($log, '[FZOC] unsupported_source_build') !== false) {
+        $status = 'impossible';
+        $errorCode = 'unsupported_firmware_build';
+    } elseif (
+        stripos($log, "Symbols not resolved using firmware's API") !== false
+        || stripos($log, 'app may not be runnable') !== false
+    ) {
+        $status = 'impossible';
+        $errorCode = 'firmware_api_incompatible';
+    } elseif (stripos($log, 'Found nothing to build') !== false) {
         $status = 'impossible';
         $errorCode = 'nothing_to_build';
     } elseif (

@@ -1,6 +1,48 @@
 (() => {
     'use strict';
 
+    const lang = window.FZOC_LANG === 'en' ? 'en' : 'fr';
+    const i18n = window.FZOC_I18N || {};
+
+    function tr(key, replacements = {}) {
+        let value = typeof i18n[key] === 'string' ? i18n[key] : key;
+
+        for (const [name, replacement] of Object.entries(replacements)) {
+            value = value.replaceAll('{' + name + '}', String(replacement));
+        }
+
+        return value;
+    }
+
+    function serverError(errorCode, fallback = '') {
+        const messages = i18n.server_errors || {};
+        return (errorCode && messages[errorCode]) || fallback;
+    }
+
+    function channelLabel(channel, fallback = '') {
+        const key = {
+            release: 'channel_release',
+            rc: 'channel_rc',
+            dev: 'channel_dev'
+        }[channel];
+
+        return key ? tr(key) : (fallback || channel);
+    }
+
+    function formatDate(value) {
+        const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(value || '');
+
+        if (!match) {
+            return value || '';
+        }
+
+        const [, year, month, day, hour, minute, second] = match;
+
+        return lang === 'fr'
+            ? day + '/' + month + '/' + year + ' ' + hour + ':' + minute + ':' + second
+            : year + '/' + month + '/' + day + ' ' + hour + ':' + minute + ':' + second;
+    }
+
     async function readJsonResponse(response) {
         const text = await response.text();
 
@@ -15,8 +57,8 @@
 
             throw new Error(
                 clean
-                    ? 'Réponse serveur invalide : ' + clean.slice(0, 350)
-                    : 'Réponse serveur vide ou invalide (HTTP ' + response.status + ').'
+                    ? tr('invalid_server_response') + clean.slice(0, 350)
+                    : tr('empty_server_response') + ' (HTTP ' + response.status + ').'
             );
         }
     }
@@ -24,8 +66,12 @@
     const form = document.getElementById('compile-form');
     const button = document.getElementById('compile-button');
     const message = document.getElementById('form-message');
+    const firmwareSelect = document.getElementById('firmware_slug');
+    const channelSelect = document.getElementById('firmware_channel');
+    const versionSelect = document.getElementById('firmware_version');
 
     let recentTimer = null;
+    let firmwareCatalog = [];
 
     function setMessage(text, type = 'error') {
         message.hidden = !text;
@@ -36,19 +82,19 @@
     function setButtonBusy(busy) {
         button.disabled = busy;
         button.innerHTML = busy
-            ? '<span class="mif-spinner4 ani-spin icon mr-1"></span> Préparation…'
-            : '<span class="mif-play ani-hover-horizontal icon mr-1"></span> Compiler';
+            ? '<span class="mif-spinner4 ani-spin icon mr-1"></span> ' + tr('preparing')
+            : '<span class="mif-play ani-hover-horizontal icon mr-1"></span> ' + tr('compile');
     }
 
     function statusLabel(status) {
         const labels = {
-            queued: 'en file',
-            pending: 'en file',
-            running: 'en cours',
-            success: 'compilé',
-            error: 'erreur',
-            impossible: 'erreur',
-            deleted: 'supprimé'
+            queued: tr('status_queued'),
+            pending: tr('status_queued'),
+            running: tr('status_running'),
+            success: tr('status_success'),
+            error: tr('status_error'),
+            impossible: tr('status_error'),
+            deleted: tr('status_deleted')
         };
 
         return labels[status] || status;
@@ -60,52 +106,129 @@
         return td;
     }
 
+    function fillSelect(select, options, selectedValue = null) {
+        select.replaceChildren();
+
+        for (const optionData of options) {
+            const option = document.createElement('option');
+            option.value = String(optionData.value);
+            option.textContent = optionData.label;
+
+            if (selectedValue !== null && String(optionData.value) === String(selectedValue)) {
+                option.selected = true;
+            }
+
+            select.appendChild(option);
+        }
+
+        select.disabled = options.length === 0;
+    }
+
+    function selectedFirmware() {
+        return firmwareCatalog.find(
+            firmware => firmware.slug === firmwareSelect.value
+        ) || null;
+    }
+
+    function selectedChannel() {
+        const firmware = selectedFirmware();
+
+        if (!firmware) {
+            return null;
+        }
+
+        return firmware.channels.find(
+            channel => channel.id === channelSelect.value
+        ) || null;
+    }
+
+    function refreshVersions() {
+        const channel = selectedChannel();
+
+        if (!channel) {
+            fillSelect(versionSelect, []);
+            return;
+        }
+
+        const latest = channel.versions.find(version => version.latest);
+
+        fillSelect(
+            versionSelect,
+            channel.versions.map(version => ({
+                value: version.id,
+                label: (version.latest ? tr('latest_prefix') : '') + version.name
+            })),
+            latest ? latest.id : channel.versions[0]?.id
+        );
+    }
+
+    function refreshChannels() {
+        const firmware = selectedFirmware();
+
+        if (!firmware) {
+            fillSelect(channelSelect, []);
+            fillSelect(versionSelect, []);
+            return;
+        }
+
+        const preferred =
+            firmware.channels.find(channel => channel.id === 'release') ||
+            firmware.channels[0];
+
+        fillSelect(
+            channelSelect,
+            firmware.channels.map(channel => ({
+                value: channel.id,
+                label: channelLabel(channel.id, channel.label)
+            })),
+            preferred?.id
+        );
+
+        refreshVersions();
+    }
+
+    async function loadFirmwareCatalog() {
+        button.disabled = true;
+        firmwareSelect.disabled = true;
+        channelSelect.disabled = true;
+        versionSelect.disabled = true;
+
+        const response = await fetch('/api/firmwares.php', {cache: 'no-store'});
+        const data = await readJsonResponse(response);
+
+        if (!response.ok || !data.ok || !Array.isArray(data.firmwares)) {
+            throw new Error(
+                data.message ||
+                tr('firmware_loading_error')
+            );
+        }
+
+        firmwareCatalog = data.firmwares;
+
+        fillSelect(
+            firmwareSelect,
+            firmwareCatalog.map(firmware => ({
+                value: firmware.slug,
+                label: firmware.name
+            }))
+        );
+
+        refreshChannels();
+        button.disabled = firmwareCatalog.length === 0;
+    }
+
     function buildAction(item) {
         const action = document.createElement('td');
         action.className = 'fz-table-action';
 
-        if (item.download) {
+        if (item.status === 'success' && item.download) {
             const link = document.createElement('a');
-            link.className = 'button success fz-fap-button';
+            link.className = 'button success shadowed fz-fap-button';
             link.href = item.download;
-            link.innerHTML = '<span class="mif-download ani-hover-horizontal"> FAP</span>';
+            link.innerHTML = '<span class="mif-download ani-hover-horizontal"> ' + tr('fap') + '</span>';
             action.appendChild(link);
-            return action;
         }
 
-        if (item.status === 'queued' || item.status === 'pending') {
-            const queued = document.createElement('span');
-            queued.className = 'button secondary fz-progress-button';
-
-            const position = item.queue_position
-                ? 'File #' + item.queue_position
-                : 'En file';
-
-            queued.innerHTML =
-                '<span class="mif-hour-glass icon"></span><span>' + position + '</span>';
-            action.appendChild(queued);
-            return action;
-        }
-
-        if (item.status === 'running') {
-            const progress = document.createElement('span');
-            progress.className = 'button secondary fz-progress-button';
-            progress.innerHTML =
-                '<span class="mif-spinner4 ani-spin icon"></span><span>En cours</span>';
-            action.appendChild(progress);
-            return action;
-        }
-
-        if (['error', 'impossible'].includes(item.status)) {
-            const failed = document.createElement('span');
-            failed.className = 'button alert fz-error-button';
-            failed.innerHTML =
-                '<span class="mif-cross icon"></span><span>Erreur</span>';
-            action.appendChild(failed);
-            return action;
-        }
-
-        action.textContent = '—';
         return action;
     }
 
@@ -129,7 +252,7 @@
 
             if (!data.items.length) {
                 const tr = document.createElement('tr');
-                const td = cell('Aucune compilation pour le moment.');
+                const td = cell(tr('no_compilations'));
                 td.colSpan = 5;
                 td.className = 'text-center p-4';
                 tr.appendChild(td);
@@ -143,7 +266,7 @@
                     repo.href = item.application.repository;
                     repo.target = '_blank';
                     repo.rel = 'noopener noreferrer';
-                    repo.className = 'button primary outline small fz-repo-button';
+                    repo.className = 'button primary outline small shadowed fz-repo-button';
                     repo.title = item.application.repository;
 
                     const repoIcon = document.createElement('span');
@@ -157,15 +280,30 @@
                     app.appendChild(repo);
 
                     tr.appendChild(app);
-                    tr.appendChild(cell(item.date));
+                    tr.appendChild(cell(formatDate(item.date)));
 
                     const status = document.createElement('td');
-                    const badge = document.createElement('span');
-                    badge.className = 'fz-status status-' + item.status;
+                    const badge = document.createElement('button');
+                    badge.type = 'button';
+                    badge.disabled = true;
+                    badge.className = 'button shadowed fz-status-button';
+
+                    if (item.status === 'success') {
+                        badge.classList.add('success');
+                    } else if (['error', 'impossible', 'deleted'].includes(item.status)) {
+                        badge.classList.add('alert');
+                    } else if (['queued', 'pending'].includes(item.status)) {
+                        badge.classList.add('yellow');
+                    } else if (item.status === 'running') {
+                        badge.classList.add('warning');
+                    } else {
+                        badge.classList.add('secondary');
+                    }
+
                     badge.textContent = statusLabel(item.status);
 
                     if (item.request_count > 1) {
-                        badge.title = item.request_count + ' demandes regroupées';
+                        badge.title = tr('grouped_requests', {count: item.request_count});
                     }
 
                     status.appendChild(badge);
@@ -174,7 +312,7 @@
                     tr.appendChild(cell(
                         item.firmware.name + ' · ' +
                         item.firmware.version + ' · ' +
-                        item.firmware.channel
+                        channelLabel(item.firmware.channel, item.firmware.channel)
                     ));
 
                     tr.appendChild(buildAction(item));
@@ -187,6 +325,9 @@
 
         recentTimer = setTimeout(loadRecent, 2000);
     }
+
+    firmwareSelect.addEventListener('change', refreshChannels);
+    channelSelect.addEventListener('change', refreshVersions);
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -206,30 +347,34 @@
 
             if (!response.ok || !data.ok) {
                 throw new Error(
-                    data.message ||
-                    data.error ||
-                    'La compilation n’a pas pu être lancée.'
+                    serverError(
+                        data.error,
+                        data.message || tr('launch_error')
+                    )
                 );
             }
 
             let successMessage;
 
             if (data.cache_hit) {
-                successMessage =
-                    data.application.name +
-                    ' est déjà compilé pour cette révision et ce firmware.';
+                successMessage = tr('cache_hit', {
+                    app: data.application.name
+                });
             } else if (data.deduplicated) {
-                successMessage =
-                    'Une compilation identique de ' +
-                    data.application.name +
-                    ' est déjà ' +
-                    (data.status === 'running' ? 'en cours.' : 'dans la file.');
+                successMessage = tr(
+                    data.status === 'running'
+                        ? 'deduplicated_running'
+                        : 'deduplicated_queued',
+                    {app: data.application.name}
+                );
             } else {
-                successMessage =
-                    data.application.name +
-                    ' ajouté à la file' +
-                    (data.queue_position ? ' (position ' + data.queue_position + ')' : '') +
-                    '.';
+                successMessage = tr(
+                    data.queue_position ? 'queued_position' : 'queued',
+                    {
+                        app: data.application.name,
+                        position: data.queue_position || ''
+                    }
+                );
             }
 
             setMessage(successMessage, 'success');
@@ -243,6 +388,11 @@
         } finally {
             setButtonBusy(false);
         }
+    });
+
+    loadFirmwareCatalog().catch(error => {
+        setMessage(error.message);
+        button.disabled = true;
     });
 
     loadRecent();

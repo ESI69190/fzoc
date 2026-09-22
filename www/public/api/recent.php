@@ -11,6 +11,7 @@ if (!is_file(__DIR__ . '/../../config.php')) {
     require_once __DIR__ . '/../../config.php';
 }
 require_once __DIR__ . '/../../class/fzcoBuildQueue.class.php';
+require_once __DIR__ . '/../../class/fzcoTime.class.php';
 
 fzcoEnsureBuildQueueSchema($bdd_connexion);
 
@@ -52,7 +53,7 @@ foreach ($newQuery->fetchAll(PDO::FETCH_ASSOC) as $row) {
 
     $items[] = [
         'job' => $row['public_job_id'],
-        'date' => $row['last_requested_at'],
+        'date' => fzcoUtcToDisplayTime((string) $row['last_requested_at']),
         'status' => $row['build_status'],
         'queue_position' => $queuePositions[(int) $row['build_job_id']] ?? null,
         'request_count' => (int) $row['request_count'],
@@ -121,7 +122,7 @@ foreach ($legacyQuery->fetchAll(PDO::FETCH_ASSOC) as $row) {
 
     $items[] = [
         'job' => $job,
-        'date' => $row['compiled_date'],
+        'date' => fzcoUtcToDisplayTime((string) $row['compiled_date']),
         'status' => $status,
         'queue_position' => null,
         'request_count' => 1,
@@ -149,7 +150,7 @@ $items = array_slice($items, 0, 50);
 $legacyTotal = (int) $bdd_connexion->query('SELECT COUNT(*) FROM fzco_compiled')->fetchColumn();
 $newTotal = (int) $bdd_connexion->query('SELECT COUNT(*) FROM fzco_build_job')->fetchColumn();
 
-$monthStart = date('Y-m-01 00:00:00');
+$monthStart = fzcoLocalMonthStartUtc();
 
 $legacyMonth = $bdd_connexion->prepare(
     'SELECT COUNT(*) FROM fzco_compiled WHERE compiled_date >= :month_start'
@@ -171,6 +172,7 @@ $newSuccess = (int) $bdd_connexion->query(
 
 echo json_encode([
     'ok' => true,
+    'timezone' => fzcoDisplayTimezoneName(),
     'stats' => [
         'total' => $legacyTotal + $newTotal,
         'this_month' => (int) $legacyMonth->fetchColumn() + (int) $newMonth->fetchColumn(),

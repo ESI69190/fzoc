@@ -105,6 +105,36 @@ a:hover {
     border-bottom-color: #fff;
 }
 
+.esi-lang-switch {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    padding: 0 1rem;
+    color: rgba(255, 255, 255, .55);
+    white-space: nowrap;
+}
+
+.esi-nav .esi-lang-switch a,
+.esi-nav .esi-lang-switch a:hover,
+.esi-nav .esi-lang-switch a.current {
+    min-height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, .72);
+}
+
+.esi-nav .esi-lang-switch a:hover,
+.esi-nav .esi-lang-switch a.current {
+    color: #fff;
+}
+
+.esi-nav .esi-lang-switch a.current {
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: .2rem;
+}
+
 /* Main frame */
 .fz-shell {
     max-width: 1180px;
@@ -275,18 +305,73 @@ a:hover {
     color: #fff;
 }
 
-.fz-shell .button.secondary,
-.fz-shell .button.alert {
+.fz-shell .button.secondary {
     background-color: var(--brand-secondary);
     border-color: var(--brand-secondary);
     color: #fff;
 }
 
-.fz-shell .button.secondary:hover,
-.fz-shell .button.alert:hover {
+.fz-shell .button.secondary:hover {
     background-color: var(--brand-primary);
     border-color: var(--brand-primary);
     color: #fff;
+}
+
+/* Build state colors: keep Metro semantics visible instead of recoloring
+   every button with the Eyeshield palette. */
+.fz-shell .button.success {
+    background-color: #60a917;
+    border-color: #60a917;
+    color: #fff;
+}
+
+.fz-shell .button.success:hover {
+    background-color: #4f8d13;
+    border-color: #4f8d13;
+    color: #fff;
+}
+
+.fz-shell .button.alert {
+    background-color: #ce352c;
+    border-color: #ce352c;
+    color: #fff;
+}
+
+.fz-shell .button.alert:hover {
+    background-color: #ad2d25;
+    border-color: #ad2d25;
+    color: #fff;
+}
+
+.fz-shell .button.yellow {
+    background-color: #f9c80e;
+    border-color: #f9c80e;
+    color: #fff;
+}
+
+.fz-shell .button.yellow:hover {
+    background-color: #dfb30c;
+    border-color: #dfb30c;
+    color: #fff;
+}
+
+.fz-shell .button.warning {
+    background-color: #ff9447;
+    border-color: #ff9447;
+    color: #fff;
+}
+
+.fz-shell .button.warning:hover {
+    background-color: #e7833f;
+    border-color: #e7833f;
+    color: #fff;
+}
+
+/* Status labels must stay pure white, including disabled Metro buttons. */
+.fz-shell .button.fz-status-button,
+.fz-shell .button.fz-status-button:hover,
+.fz-shell .button.fz-status-button:disabled {
+    color: #FFF !important;
 }
 
 .fz-shell .button.primary.outline {
@@ -345,6 +430,63 @@ a:hover {
     background: var(--brand-secondary);
     border-color: var(--brand-secondary);
     color: #fff;
+}
+
+/* Compilation status legend */
+.fz-status-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .65rem 1rem;
+    margin: 0;
+    padding: .85rem 1rem;
+    border-top: 0;
+    border-bottom: 1px solid var(--brand-border);
+    background: rgba(236, 240, 245, .45);
+    color: var(--brand-secondary);
+    font-size: .82rem;
+}
+
+.fz-status-legend-title {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .035em;
+}
+
+.fz-status-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    color: var(--brand-muted);
+}
+
+.fz-status-legend-button {
+    min-width: 86px !important;
+    min-height: 30px;
+    padding: .25rem .55rem;
+    pointer-events: none;
+    cursor: default;
+    font-size: .72rem;
+}
+
+.fz-retention-note {
+    margin-top: .8rem;
+    padding: .7rem .85rem;
+    border-left: 3px solid var(--brand-primary);
+    background: rgba(79, 65, 93, .06);
+    color: var(--brand-muted);
+    font-size: .8rem;
+    line-height: 1.45;
+}
+
+@media (max-width: 800px) {
+    .fz-status-legend {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 }
 
 /* Stats */
@@ -429,7 +571,8 @@ a:hover {
 
 .fz-fap-button,
 .fz-progress-button,
-.fz-error-button {
+.fz-error-button,
+.fz-status-button {
     min-width: 104px;
 }
 
@@ -545,4 +688,11 @@ a:hover {
     30%  { transform: translate(5px, 0); }
     36%,
     100% { transform: translate(0, 0); }
+}
+
+
+/* Download is the only action button. */
+.fz-shell .fz-fap-button,
+.fz-shell .fz-fap-button:hover {
+    color: #fff;
 }

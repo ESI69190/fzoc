@@ -16,10 +16,14 @@ $path_to_ufbt = getenv('UFBT_PATH') ?: __DIR__ . '/ufbt/';
 // Build/cache identity. Increment this value when the build environment changes.
 $build_engine_version = getenv('FZOC_BUILD_ENGINE_VERSION') ?: '1';
 
+// Compilation retention. Build artifacts and metadata are purged after this delay.
+$fzoc_retention_days = max(1, (int) (getenv('FZOC_RETENTION_DAYS') ?: 30));
+
 // Runtime paths
 $task_list         = __DIR__ . '/tasks/';
 $path_task_updates = __DIR__ . '/tasks_update/';
 $fap_path          = __DIR__ . '/public/faps/';
+$firmware_cache_path = __DIR__ . '/firmware-cache/';
 
 // Cloudflare Turnstile
 $is_active_cloudflare_turnstile = filter_var(

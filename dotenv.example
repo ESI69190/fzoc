@@ -23,9 +23,21 @@ UFBT_PATH=/usr/local/fzoc/ufbt/
 # Increment to invalidate all cached FAPs after a compiler/toolchain change.
 FZOC_BUILD_ENGINE_VERSION=1
 
+# Compilation retention
+# FAP files, build metadata and request records are purged after this period.
+FZOC_RETENTION_DAYS=30
+
 # Worker
 FZOC_TASK_INTERVAL=2
 FZOC_MAINT_INTERVAL=3600
+FZOC_FIRMWARE_SYNC_INTERVAL=3600
+FZOC_FIRMWARE_VERSION_LIMIT=5
+
+# Display timezone. Database timestamps remain stored in UTC.
+FZOC_TIMEZONE=Europe/Paris
+
+# Optional: increases the GitHub API rate limit for RogueMaster catalog sync.
+# FZOC_GITHUB_TOKEN=
 
 # Cloudflare Turnstile
 IS_ACTIVE_CLOUDFLARE_TURNSTILE=false

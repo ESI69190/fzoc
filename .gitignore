@@ -21,3 +21,6 @@ draft
 .env
 /cerbot/*
 !/cerbot/.keep
+
+# Cached firmware source trees/toolchains
+/www/firmware-cache/*

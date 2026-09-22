@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS fzco_build_job (
     firmware_version_id INT NOT NULL,
     firmware_version_name VARCHAR(255) NOT NULL,
     firmware_version_stamp DATETIME NOT NULL,
-    sdk_channel ENUM('release','dev') NOT NULL,
+    sdk_channel VARCHAR(32) NOT NULL,
 
     engine_version VARCHAR(64) NOT NULL,
     build_path VARCHAR(255) NOT NULL,
@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS fzco_build_request (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL);
+
+    $channelColumn = $db->query(
+        "SHOW COLUMNS FROM fzco_build_job LIKE 'sdk_channel'"
+    )->fetch(PDO::FETCH_ASSOC);
+
+    if (
+        is_array($channelColumn)
+        && str_starts_with(strtolower((string) ($channelColumn['Type'] ?? '')), 'enum(')
+    ) {
+        $db->exec(
+            'ALTER TABLE fzco_build_job
+             MODIFY COLUMN sdk_channel VARCHAR(32) NOT NULL'
+        );
+    }
 
     $done = true;
 }

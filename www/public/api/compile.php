@@ -16,8 +16,10 @@ if (!is_file(__DIR__ . '/../../config.php')) {
     require_once __DIR__ . '/../../config.php';
 }
 require_once __DIR__ . '/../../class/fzcoBuildQueue.class.php';
+require_once __DIR__ . '/../../class/fzcoFirmwareCatalog.class.php';
 
 fzcoEnsureBuildQueueSchema($bdd_connexion);
+fzcoEnsureFirmwareCatalogSchema($bdd_connexion);
 
 set_error_handler(
     static function (int $severity, string $message, string $file, int $line): bool {
@@ -65,119 +67,254 @@ function json_response(array $payload, int $status = 200): never
     exit;
 }
 
-function detect_repository(string $url): array|false
+function is_public_git_host(string $host): bool
 {
-    if (preg_match('~^https://github\.com/([^/]+)/([^/?#]+?)(?:\.git)?/?$~i', $url, $m)) {
-        $repo = preg_replace('/\.git$/i', '', $m[2]);
-
-        return [
-            'provider' => 'github',
-            'clone_url' => 'https://github.com/' . $m[1] . '/' . $repo . '.git',
-            'owner' => $m[1],
-            'repo' => $repo,
-        ];
+    $host = trim($host, '[]');
+    if ($host === '') {
+        return false;
     }
 
-    if (preg_match('~^https://gitlab\.com/(.+?)(?:\.git)?/?$~i', $url, $m)) {
-        $path = preg_replace('/\.git$/i', '', trim($m[1], '/'));
-        if ($path === '' || !str_contains($path, '/')) {
+    $lowerHost = strtolower($host);
+    if ($lowerHost === 'localhost' || str_ends_with($lowerHost, '.localhost')) {
+        return false;
+    }
+
+    $addresses = [];
+
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $addresses[] = $host;
+    } else {
+        $records = @dns_get_record($host, DNS_A | DNS_AAAA);
+        if (!is_array($records) || count($records) === 0) {
             return false;
         }
 
-        return [
-            'provider' => 'gitlab',
-            'clone_url' => 'https://gitlab.com/' . $path . '.git',
-            'path' => $path,
-        ];
-    }
-
-    return false;
-}
-
-function detect_default_branch(string $cloneUrl): string
-{
-    $output = [];
-    $exitCode = 0;
-
-    exec(
-        'git ls-remote --symref ' . escapeshellarg($cloneUrl) . ' HEAD 2>/dev/null',
-        $output,
-        $exitCode
-    );
-
-    if ($exitCode === 0) {
-        foreach ($output as $line) {
-            if (preg_match('/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/', trim($line), $m)) {
-                return $m[1];
+        foreach ($records as $record) {
+            if (!empty($record['ip'])) {
+                $addresses[] = (string) $record['ip'];
+            }
+            if (!empty($record['ipv6'])) {
+                $addresses[] = (string) $record['ipv6'];
             }
         }
     }
 
-    return 'main';
+    if (count($addresses) === 0) {
+        return false;
+    }
+
+    foreach (array_unique($addresses) as $address) {
+        if (!filter_var(
+            $address,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        )) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
-function resolve_remote_commit(string $cloneUrl, string $branch): string|false
+function detect_repository(string $url): array|false
+{
+    $url = trim($url);
+
+    // Accept the clone formats users commonly copy from Git hosting UIs and
+    // normalize them to anonymous HTTPS so the public compiler never needs
+    // repository credentials or SSH keys.
+    if (preg_match('~^(?:[^@/\\s]+@)([a-z0-9.-]+):(.+)$~i', $url, $m)) {
+        $url = 'https://' . $m[1] . '/' . ltrim($m[2], '/');
+    } elseif (preg_match('~^ssh://(?:[^@/\\s]+@)?([^/:?#]+)(?::[0-9]+)?/(.+)$~i', $url, $m)) {
+        $url = 'https://' . $m[1] . '/' . ltrim($m[2], '/');
+    } elseif (preg_match('~^git://([^/:?#]+)(?::[0-9]+)?/(.+)$~i', $url, $m)) {
+        $url = 'https://' . $m[1] . '/' . ltrim($m[2], '/');
+    }
+
+    if (!filter_var($url, FILTER_VALIDATE_URL)) {
+        return false;
+    }
+
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        return false;
+    }
+
+    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    $path = trim((string) ($parts['path'] ?? ''), '/');
+
+    if (
+        $scheme !== 'https'
+        || $host === ''
+        || $path === ''
+        || isset($parts['user'])
+        || isset($parts['pass'])
+        || isset($parts['query'])
+        || isset($parts['fragment'])
+        || (isset($parts['port']) && (int) $parts['port'] !== 443)
+        || !is_public_git_host($host)
+    ) {
+        return false;
+    }
+
+    return [
+        'provider' => 'git',
+        'clone_url' => 'https://' . $host . '/' . $path,
+        'host' => $host,
+        'path' => $path,
+    ];
+}
+
+function git_remote_command_prefix(): string
+{
+    return 'GIT_TERMINAL_PROMPT=0 git'
+        . ' -c protocol.file.allow=never'
+        . ' -c protocol.ext.allow=never'
+        . ' -c http.followRedirects=false';
+}
+
+function resolve_remote_head(string $cloneUrl): array|false
 {
     $output = [];
     $exitCode = 0;
 
     exec(
-        'git ls-remote ' . escapeshellarg($cloneUrl)
-        . ' ' . escapeshellarg('refs/heads/' . $branch)
-        . ' 2>/dev/null',
+        git_remote_command_prefix()
+        . ' ls-remote --symref ' . escapeshellarg($cloneUrl)
+        . ' HEAD 2>/dev/null',
         $output,
         $exitCode
     );
 
-    if ($exitCode !== 0 || count($output) < 1) {
+    if ($exitCode !== 0) {
         return false;
     }
 
-    $parts = preg_split('/\s+/', trim($output[0]));
-    $sha = strtolower((string) ($parts[0] ?? ''));
+    $branch = 'HEAD';
+    $commit = null;
 
-    return preg_match('/^[a-f0-9]{40,64}$/', $sha) ? $sha : false;
+    foreach ($output as $line) {
+        $line = trim($line);
+
+        if (preg_match('/^ref:\\s+refs\\/heads\\/([^\\s]+)\\s+HEAD$/', $line, $m)) {
+            $branch = $m[1];
+            continue;
+        }
+
+        if (preg_match('/^([a-f0-9]{40,64})\\s+HEAD$/i', $line, $m)) {
+            $commit = strtolower($m[1]);
+        }
+    }
+
+    if ($commit === null) {
+        return false;
+    }
+
+    return [
+        'branch' => $branch,
+        'commit' => $commit,
+    ];
+}
+
+function remove_tree(string $path): void
+{
+    if (!is_dir($path)) {
+        return;
+    }
+
+    $items = scandir($path);
+    if ($items === false) {
+        return;
+    }
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $target = $path . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($target) && !is_link($target)) {
+            remove_tree($target);
+        } else {
+            @unlink($target);
+        }
+    }
+
+    @rmdir($path);
 }
 
 function fetch_application_fam(array $repository, string $revision): array
 {
-    if ($repository['provider'] === 'github') {
-        $url = sprintf(
-            'https://raw.githubusercontent.com/%s/%s/%s/application.fam',
-            rawurlencode($repository['owner']),
-            rawurlencode($repository['repo']),
-            rawurlencode($revision)
-        );
-    } else {
-        $url = sprintf(
-            'https://gitlab.com/%s/-/raw/%s/application.fam',
-            $repository['path'],
-            rawurlencode($revision)
-        );
+    $cloneUrl = (string) $repository['clone_url'];
+    $tempDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+        . DIRECTORY_SEPARATOR
+        . 'fzoc-fam-'
+        . bin2hex(random_bytes(8));
+
+    if (!@mkdir($tempDir, 0700, true) && !is_dir($tempDir)) {
+        return [false, $cloneUrl, 'temporary_directory_failed'];
     }
 
-    $curl = curl_init();
-    curl_setopt_array($curl, [
-        CURLOPT_URL => $url,
-        CURLOPT_HEADER => false,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_MAXREDIRS => 3,
-        CURLOPT_CONNECTTIMEOUT => 8,
-        CURLOPT_TIMEOUT => 20,
-        CURLOPT_USERAGENT => 'FZOC/ESI69190',
-    ]);
+    try {
+        $output = [];
+        $exitCode = 0;
 
-    $body = curl_exec($curl);
-    $code = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-    $error = curl_error($curl);
-    curl_close($curl);
+        exec('git init -q ' . escapeshellarg($tempDir) . ' 2>&1', $output, $exitCode);
+        if ($exitCode !== 0) {
+            return [false, $cloneUrl, implode("\\n", $output)];
+        }
 
-    if ($body === false || $code !== 200) {
-        return [false, $url, $error !== '' ? $error : 'HTTP ' . $code];
+        $output = [];
+        exec(
+            'git -C ' . escapeshellarg($tempDir)
+            . ' remote add origin ' . escapeshellarg($cloneUrl)
+            . ' 2>&1',
+            $output,
+            $exitCode
+        );
+        if ($exitCode !== 0) {
+            return [false, $cloneUrl, implode("\\n", $output)];
+        }
+
+        $output = [];
+        exec(
+            git_remote_command_prefix()
+            . ' -C ' . escapeshellarg($tempDir)
+            . ' fetch -q --depth 1 --filter=blob:none origin ' . escapeshellarg($revision)
+            . ' 2>&1',
+            $output,
+            $exitCode
+        );
+        if ($exitCode !== 0) {
+            return [false, $cloneUrl, implode("\\n", $output)];
+        }
+
+        $output = [];
+        exec(
+            git_remote_command_prefix()
+            . ' -C ' . escapeshellarg($tempDir)
+            . ' show FETCH_HEAD:application.fam 2>&1',
+            $output,
+            $exitCode
+        );
+
+        if ($exitCode !== 0) {
+            return [
+                false,
+                $cloneUrl . '#' . $revision . ':application.fam',
+                implode("\\n", $output),
+            ];
+        }
+
+        return [
+            implode("\n", $output) . "\n",
+            $cloneUrl . '#' . $revision . ':application.fam',
+            null,
+        ];
+    } finally {
+        remove_tree($tempDir);
     }
-
-    return [$body, $url, null];
 }
 
 function verify_turnstile(string $secret, string $response): bool
@@ -217,10 +354,12 @@ function build_task_script(
     string $commit,
     string $cloneDir,
     string $stateDir,
-    string $versionType,
-    string $updateUrl,
     string $outputDir,
-    string $outputFap
+    string $outputFap,
+    array $firmware,
+    string $firmwareCachePath,
+    string $appId,
+    string $publicId
 ): string {
     $lines = [
         '#!/bin/sh',
@@ -229,26 +368,119 @@ function build_task_script(
         'mkdir -p ' . escapeshellarg(dirname($cloneDir)),
         'git init -q ' . escapeshellarg($cloneDir),
         'git -C ' . escapeshellarg($cloneDir) . ' remote add origin ' . escapeshellarg($gitUrl),
-        'git -C ' . escapeshellarg($cloneDir) . ' fetch -q --depth 1 origin ' . escapeshellarg($commit),
+        git_remote_command_prefix() . ' -C ' . escapeshellarg($cloneDir) . ' fetch -q --depth 1 origin ' . escapeshellarg($commit),
         'git -C ' . escapeshellarg($cloneDir) . ' checkout -q --detach FETCH_HEAD',
-        'cd ' . escapeshellarg(rtrim($GLOBALS['path_to_ufbt'], '/')),
-        '. bin/activate',
-        'cd ' . escapeshellarg($cloneDir),
-        'ufbt dotenv_create --state-dir ' . escapeshellarg($stateDir),
     ];
 
-    $updateCommand = 'ufbt update';
-    if ($versionType === 'dev') {
-        $updateCommand .= ' --channel dev';
-    }
-    $updateCommand .= ' --index-url=' . escapeshellarg($updateUrl);
+    if ($firmware['build_method'] === 'ufbt') {
+        $lines[] = 'cd ' . escapeshellarg(rtrim($GLOBALS['path_to_ufbt'], '/'));
+        $lines[] = '. bin/activate';
+        $lines[] = 'cd ' . escapeshellarg($cloneDir);
+        $lines[] = 'ufbt dotenv_create --state-dir ' . escapeshellarg($stateDir);
 
-    $lines[] = $updateCommand;
-    $lines[] = 'ufbt';
+        $sdkUrl = trim((string) ($firmware['sdk_url'] ?? ''));
+
+        if ($sdkUrl !== '') {
+            // Exact SDK archive, ideal for pinned and historical releases.
+            $lines[] = 'ufbt update'
+                . ' --url=' . escapeshellarg($sdkUrl)
+                . ' --hw-target=f7';
+        } else {
+            // directory.json is a channel index, not a branch-root URL.
+            // Using it with --branch makes uFBT append "/<branch>/" to
+            // directory.json and guarantees a broken URL.
+            $channel = match ($firmware['channel']) {
+                'dev' => 'dev',
+                'rc' => 'rc',
+                default => 'release',
+            };
+
+            $lines[] = 'ufbt update'
+                . ' --channel=' . escapeshellarg($channel)
+                . ' --index-url=' . escapeshellarg($firmware['directory_url']);
+        }
+
+        $lines[] = 'ufbt';
+        $lines[] = 'mkdir -p ' . escapeshellarg($outputDir);
+        $lines[] = 'FAP_FILE="$(find dist -maxdepth 1 -type f -name \'*.fap\' | head -n 1)"';
+        $lines[] = 'test -n "$FAP_FILE"';
+        $lines[] = 'mv -f "$FAP_FILE" ' . escapeshellarg($outputFap);
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    if ($firmware['build_method'] !== 'fbt_source') {
+        throw new RuntimeException('Unsupported firmware build method');
+    }
+
+    $firmwareRepo = trim((string) $firmware['repository_url']);
+    $firmwareRef = trim((string) (
+        $firmware['source_commit']
+        ?: $firmware['version_ref']
+    ));
+
+    if ($firmwareRepo === '' || $firmwareRef === '') {
+        throw new RuntimeException('Firmware source reference is incomplete');
+    }
+
+    $cacheKey = hash('sha256', $firmwareRepo . '|' . $firmwareRef);
+    $firmwareDir = rtrim($firmwareCachePath, '/')
+        . '/' . $firmware['firmware_slug'] . '/' . $cacheKey;
+    $tempFirmwareDir = $firmwareDir . '.tmp-' . $publicId;
+    $applicationRelative = 'applications_user/fzoc_' . $publicId;
+    $applicationDir = $firmwareDir . '/' . $applicationRelative;
+
+    $lines[] = 'if ! git -C ' . escapeshellarg($firmwareDir)
+        . ' rev-parse --git-dir >/dev/null 2>&1; then';
+    $lines[] = '  rm -rf -- ' . escapeshellarg($firmwareDir);
+    $lines[] = '  rm -rf -- ' . escapeshellarg($tempFirmwareDir);
+    $lines[] = '  mkdir -p ' . escapeshellarg(dirname($firmwareDir));
+    $lines[] = '  git init -q ' . escapeshellarg($tempFirmwareDir);
+    $lines[] = '  git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' remote add origin ' . escapeshellarg($firmwareRepo);
+    $lines[] = '  git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' fetch -q --depth 1 origin ' . escapeshellarg($firmwareRef);
+    $lines[] = '  git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' checkout -q -B fzoc-build FETCH_HEAD';
+    $lines[] = '  if [ ! -f ' . escapeshellarg($tempFirmwareDir . '/fbt') . ' ]; then';
+    $lines[] = '    echo "[FZOC] unsupported_source_build: firmware has no fbt"';
+    $lines[] = '    rm -rf -- ' . escapeshellarg($tempFirmwareDir);
+    $lines[] = '    exit 65';
+    $lines[] = '  fi';
+    $lines[] = '  git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' submodule sync --recursive';
+    $lines[] = '  for SUBMODULE_PATH in $(git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' config -f .gitmodules --get-regexp ' . escapeshellarg('^submodule\\..*\\.path$')
+        . ' 2>/dev/null | awk ' . escapeshellarg('{print $2}')
+        . ' | grep -v ' . escapeshellarg('^applications/')
+        . ' || true); do';
+    $lines[] = '    git -C ' . escapeshellarg($tempFirmwareDir)
+        . ' submodule update --init --recursive --depth 1 -- "$SUBMODULE_PATH"';
+    $lines[] = '  done';
+    $lines[] = '  mv ' . escapeshellarg($tempFirmwareDir)
+        . ' ' . escapeshellarg($firmwareDir);
+    $lines[] = 'fi';
+    $lines[] = 'git -C ' . escapeshellarg($firmwareDir)
+        . ' checkout -q -B fzoc-build HEAD';
+    $lines[] = 'test -f ' . escapeshellarg($firmwareDir . '/fbt')
+        . ' || { echo "[FZOC] unsupported_source_build: firmware has no fbt"; exit 65; }';
+
+    $cleanupCommand = 'rm -rf -- ' . escapeshellarg($applicationDir);
+
+    $lines[] = $cleanupCommand;
+    $lines[] = 'mkdir -p ' . escapeshellarg(dirname($applicationDir));
+    $lines[] = 'cp -a ' . escapeshellarg($cloneDir)
+        . ' ' . escapeshellarg($applicationDir);
+    $lines[] = 'trap ' . escapeshellarg($cleanupCommand) . ' EXIT';
+    $lines[] = 'cd ' . escapeshellarg($firmwareDir);
+    $lines[] = 'FBT_NO_SYNC=1 ./fbt build APPSRC=' . escapeshellarg($applicationRelative);
     $lines[] = 'mkdir -p ' . escapeshellarg($outputDir);
-    $lines[] = 'FAP_FILE="$(find dist -maxdepth 1 -type f -name \'*.fap\' | head -n 1)"';
+    $lines[] = 'FAP_FILE="$(find build -type f -name '
+        . escapeshellarg($appId . '.fap')
+        . ' | head -n 1)"';
     $lines[] = 'test -n "$FAP_FILE"';
-    $lines[] = 'mv -f "$FAP_FILE" ' . escapeshellarg($outputFap);
+    $lines[] = 'cp -f "$FAP_FILE" ' . escapeshellarg($outputFap);
     $lines[] = '';
 
     return implode("\n", $lines);
@@ -259,22 +491,20 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $gitUrl = trim((string) ($_POST['git_url'] ?? ''));
-$firmwareTarget = (int) ($_POST['firmware_target'] ?? 0);
-$gitBranch = (int) ($_POST['git_branch'] ?? 0);
+$firmwareSlug = strtolower(trim((string) ($_POST['firmware_slug'] ?? '')));
+$firmwareChannel = strtolower(trim((string) ($_POST['firmware_channel'] ?? '')));
+$firmwareCatalogId = (int) ($_POST['firmware_version'] ?? 0);
 
-if ($gitUrl === '' || $firmwareTarget < 1 || !in_array($gitBranch, [1, 2], true)) {
+if (
+    $gitUrl === ''
+    || $firmwareCatalogId < 1
+    || !preg_match('/^[a-z0-9_-]{1,64}$/', $firmwareSlug)
+    || !preg_match('/^[a-z0-9_-]{1,32}$/', $firmwareChannel)
+) {
     json_response([
         'ok' => false,
         'error' => 'missing_fields',
-        'message' => 'Tous les champs obligatoires doivent être renseignés.',
-    ], 422);
-}
-
-if (!filter_var($gitUrl, FILTER_VALIDATE_URL)) {
-    json_response([
-        'ok' => false,
-        'error' => 'invalid_repository',
-        'message' => 'L’URL du dépôt GitHub ou GitLab n’est pas valide.',
+        'message' => 'Le firmware, le canal et la version doivent être sélectionnés.',
     ], 422);
 }
 
@@ -283,7 +513,7 @@ if ($repository === false) {
     json_response([
         'ok' => false,
         'error' => 'invalid_repository',
-        'message' => 'Utilisez une URL de dépôt GitHub ou GitLab HTTPS.',
+        'message' => 'Utilisez un dépôt Git public accessible en HTTPS. Les URL HTTPS, git@hôte:chemin.git, ssh:// et git:// sont acceptées.',
     ], 422);
 }
 
@@ -300,16 +530,18 @@ if ($is_active_cloudflare_turnstile) {
     }
 }
 
-$defaultBranch = detect_default_branch($gitUrl);
-$remoteCommit = resolve_remote_commit($gitUrl, $defaultBranch);
+$remoteHead = resolve_remote_head($gitUrl);
 
-if ($remoteCommit === false) {
+if ($remoteHead === false) {
     json_response([
         'ok' => false,
         'error' => 'git_revision_unavailable',
-        'message' => 'Impossible de déterminer la révision actuelle du dépôt.',
+        'message' => 'Impossible d’accéder au dépôt Git public ou de déterminer sa révision HEAD.',
     ], 422);
 }
+
+$defaultBranch = (string) $remoteHead['branch'];
+$remoteCommit = (string) $remoteHead['commit'];
 
 [$famBody, $famUrl, $famError] = fetch_application_fam($repository, $remoteCommit);
 
@@ -349,42 +581,66 @@ foreach ($bannedWords as $word) {
     }
 }
 
-$versionType = $gitBranch === 2 ? 'dev' : 'release';
-
-$firmwareQuery = $bdd_connexion->prepare('
+$catalogQuery = $bdd_connexion->prepare('
     SELECT
-        f.firmware_id,
-        f.firmware_name,
-        f.firmware_url_update,
-        f.firmware_ufbt_path,
-        fv.firmware_version_id,
-        fv.firmware_version_name,
-        fv.firmware_version_update_date,
-        fv.firmware_version_type
-    FROM fzco_firmware f
-    INNER JOIN fzco_depend d
-        ON d.depend_firmware_id = f.firmware_id
-    INNER JOIN fzco_firmware_version fv
-        ON fv.firmware_version_id = d.depend_firmware_version_id
-    WHERE f.firmware_id = :firmware_id
-      AND fv.firmware_version_type = :version_type
-      AND f.firmware_is_active = 1
-      AND fv.firmware_version_is_active = 1
+        c.catalog_id,
+        c.firmware_slug,
+        c.channel,
+        c.version_name,
+        c.version_ref,
+        c.version_stamp,
+        c.source_commit,
+        c.sdk_url,
+        s.firmware_name,
+        s.directory_url,
+        s.repository_url,
+        COALESCE(c.build_method, s.build_method) AS selected_build_method,
+        s.legacy_firmware_id,
+        s.state_slug
+    FROM fzco_firmware_catalog c
+    INNER JOIN fzco_firmware_source s
+        ON s.firmware_slug = c.firmware_slug
+    WHERE c.catalog_id = :catalog_id
+      AND c.firmware_slug = :firmware_slug
+      AND c.channel = :channel
+      AND c.active = 1
+      AND s.active = 1
     LIMIT 1
 ');
-$firmwareQuery->execute([
-    'firmware_id' => $firmwareTarget,
-    'version_type' => $versionType,
+$catalogQuery->execute([
+    'catalog_id' => $firmwareCatalogId,
+    'firmware_slug' => $firmwareSlug,
+    'channel' => $firmwareChannel,
 ]);
-$firmware = $firmwareQuery->fetch(PDO::FETCH_ASSOC);
+$catalog = $catalogQuery->fetch(PDO::FETCH_ASSOC);
 
-if (!$firmware) {
+if (!$catalog) {
     json_response([
         'ok' => false,
         'error' => 'firmware_unavailable',
-        'message' => 'Le firmware ou le canal demandé n’est pas disponible.',
+        'message' => 'La version de firmware demandée n’est pas disponible.',
     ], 422);
 }
+
+$versionType = (string) $catalog['channel'];
+
+$firmware = [
+    'firmware_id' => (int) ($catalog['legacy_firmware_id'] ?: 4),
+    'firmware_name' => (string) $catalog['firmware_name'],
+    'firmware_url_update' => (string) ($catalog['directory_url'] ?? ''),
+    'firmware_ufbt_path' => (string) $catalog['state_slug'],
+    'firmware_version_id' => (int) $catalog['catalog_id'],
+    'firmware_version_name' => (string) $catalog['version_name'],
+    'firmware_version_update_date' => (string) $catalog['version_stamp'],
+    'firmware_slug' => (string) $catalog['firmware_slug'],
+    'channel' => (string) $catalog['channel'],
+    'version_ref' => (string) $catalog['version_ref'],
+    'source_commit' => $catalog['source_commit'],
+    'sdk_url' => (string) ($catalog['sdk_url'] ?? ''),
+    'directory_url' => (string) ($catalog['directory_url'] ?? ''),
+    'repository_url' => (string) ($catalog['repository_url'] ?? ''),
+    'build_method' => (string) $catalog['selected_build_method'],
+];
 
 $engineVersion = (string) ($build_engine_version ?? '1');
 
@@ -392,11 +648,16 @@ $buildKeyMaterial = [
     'repository' => $gitUrl,
     'branch' => $defaultBranch,
     'commit' => $remoteCommit,
+    'firmware_slug' => $firmware['firmware_slug'],
     'firmware_id' => (int) $firmware['firmware_id'],
     'firmware_version_id' => (int) $firmware['firmware_version_id'],
     'firmware_version' => $firmware['firmware_version_name'],
+    'firmware_ref' => $firmware['version_ref'],
+    'firmware_commit' => $firmware['source_commit'],
+    'firmware_sdk_url' => $firmware['sdk_url'],
     'firmware_stamp' => $firmware['firmware_version_update_date'],
     'firmware_update_url' => $firmware['firmware_url_update'],
+    'build_method' => $firmware['build_method'],
     'channel' => $versionType,
     'engine' => $engineVersion,
 ];
@@ -563,7 +824,9 @@ try {
         $publicId = (string) $job['public_job_id'];
         $cloneDir = __DIR__ . '/../../gits/' . $publicId . '/new';
         $stateDir = rtrim($path_to_ufbt, '/') . '/fz_'
-            . $firmware['firmware_ufbt_path'] . '_' . $versionType;
+            . $firmware['firmware_ufbt_path'] . '_'
+            . $versionType . '_'
+            . substr(sha1($firmware['version_ref']), 0, 12);
         $outputDir = rtrim($fap_path, '/') . '/' . $job['build_path'];
         $outputFap = $outputDir . '/' . $appId . '.fap';
 
@@ -575,10 +838,12 @@ try {
             $remoteCommit,
             $cloneDir,
             $stateDir,
-            $versionType,
-            $firmware['firmware_url_update'],
             $outputDir,
-            $outputFap
+            $outputFap,
+            $firmware,
+            $firmware_cache_path,
+            $appId,
+            $publicId
         );
 
         if (file_put_contents($tempTaskFile, $taskBody, LOCK_EX) === false
